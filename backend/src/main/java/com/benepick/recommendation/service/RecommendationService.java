@@ -4,8 +4,8 @@ import com.benepick.recommendation.dto.RecommendationBundleResponse;
 import com.benepick.recommendation.dto.RecommendationItemResponse;
 import com.benepick.recommendation.dto.RecommendationRedirectRequest;
 import com.benepick.recommendation.dto.RecommendationRedirectResponse;
-import com.benepick.recommendation.dto.RecommendationRunResponse;
 import com.benepick.recommendation.dto.RecommendationRunHistoryItemResponse;
+import com.benepick.recommendation.dto.RecommendationRunResponse;
 import com.benepick.recommendation.dto.SimulateRecommendationRequest;
 import com.benepick.recommendation.entity.AccountCatalogEntity;
 import com.benepick.recommendation.entity.CardCatalogEntity;
@@ -19,10 +19,17 @@ import com.benepick.recommendation.repository.RecommendationRedirectEventReposit
 import com.benepick.recommendation.repository.RecommendationRunRepository;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -32,24 +39,36 @@ import org.springframework.web.server.ResponseStatusException;
 @Service
 public class RecommendationService {
 
+    private static final Pattern MAX_RATE_PATTERN = Pattern.compile("최고\\s*([0-9]+(?:\\.[0-9]+)?)\\s*%");
+    private static final Pattern BASE_RATE_PATTERN = Pattern.compile("기본\\s*([0-9]+(?:\\.[0-9]+)?)\\s*%");
+    private static final Pattern ANNUAL_FEE_MAN_WON_PATTERN = Pattern.compile("([0-9]+(?:\\.[0-9]+)?)\\s*만원");
+    private static final Pattern ANNUAL_FEE_WON_PATTERN = Pattern.compile("([0-9]{1,3}(?:,[0-9]{3})+|[0-9]{4,7})\\s*원?");
+
+    private static final Map<String, String> CATEGORY_ALIASES = buildCategoryAliases();
+    private static final Map<String, String> CATEGORY_LABELS = buildCategoryLabels();
+    private static final List<CategoryKeywordRule> CATEGORY_KEYWORD_RULES = buildCategoryKeywordRules();
+
     private final RecommendationRunRepository recommendationRunRepository;
     private final RecommendationItemRepository recommendationItemRepository;
     private final RecommendationRedirectEventRepository recommendationRedirectEventRepository;
     private final AccountCatalogRepository accountCatalogRepository;
     private final CardCatalogRepository cardCatalogRepository;
+    private final RecommendationScoringProperties scoringProperties;
 
     public RecommendationService(
         RecommendationRunRepository recommendationRunRepository,
         RecommendationItemRepository recommendationItemRepository,
         RecommendationRedirectEventRepository recommendationRedirectEventRepository,
         AccountCatalogRepository accountCatalogRepository,
-        CardCatalogRepository cardCatalogRepository
+        CardCatalogRepository cardCatalogRepository,
+        RecommendationScoringProperties scoringProperties
     ) {
         this.recommendationRunRepository = recommendationRunRepository;
         this.recommendationItemRepository = recommendationItemRepository;
         this.recommendationRedirectEventRepository = recommendationRedirectEventRepository;
         this.accountCatalogRepository = accountCatalogRepository;
         this.cardCatalogRepository = cardCatalogRepository;
+        this.scoringProperties = scoringProperties;
     }
 
     @Transactional
@@ -116,7 +135,6 @@ public class RecommendationService {
         );
     }
 
-
     @Transactional(readOnly = true)
     public List<RecommendationRunHistoryItemResponse> getRecentRuns(int limit) {
         int normalizedLimit = Math.max(1, Math.min(limit, 30));
@@ -167,9 +185,12 @@ public class RecommendationService {
     }
 
     private List<RankedProduct> rankAccounts(SimulateRecommendationRequest request) {
-        String priority = normalize(request.priority());
+        String priority = normalizePriority(request.priority());
         String salaryTransfer = normalize(request.salaryTransfer());
         String travelLevel = normalize(request.travelLevel());
+        Set<String> userCategories = canonicalizeCategories(request.categories());
+        RecommendationScoringProperties.Account accountScore = scoringProperties.resolvedAccount();
+        Set<String> accountIntentSignals = buildAccountIntentSignals(request, priority, salaryTransfer, travelLevel, userCategories, accountScore);
 
         List<AccountCatalogEntity> candidates = accountCatalogRepository.findByActiveTrue();
         if (candidates.isEmpty()) {
@@ -178,37 +199,76 @@ public class RecommendationService {
 
         List<ScoredProduct> scored = candidates.stream()
             .map(candidate -> {
-                int score = 45;
+                int score = accountScore.getBaseScore();
                 List<String> reasons = new ArrayList<>();
-                Set<String> tags = lowerSet(candidate.getTags());
 
-                if ("yes".equals(salaryTransfer) && tags.contains("salary")) {
-                    score += 30;
-                    reasons.add("급여이체 조건에서 우대 혜택이 큼");
+                Set<String> accountSignals = deriveAccountSignals(candidate);
+                Set<String> matchedIntentSignals = intersection(accountSignals, accountIntentSignals);
+
+                RateInfo rateInfo = extractRateInfo(candidate.getSummary());
+                if (rateInfo.maxRate() != null) {
+                    reasons.add("최고 금리 " + formatPercent(rateInfo.maxRate()) + "% (상품 요약 기준)");
+                    if (rateInfo.maxRate() >= accountScore.getHighRateThreshold()) {
+                        score += accountScore.getHighRateBonusWeight();
+                    }
                 }
-                if ("savings".equals(priority) && tags.contains("savings")) {
-                    score += 34;
-                    reasons.add("저축/금리 우선순위와 일치");
+                if (rateInfo.baseRate() != null) {
+                    reasons.add("기본 금리 " + formatPercent(rateInfo.baseRate()) + "% 확인");
                 }
-                if ("starter".equals(priority) && tags.contains("starter")) {
-                    score += 24;
-                    reasons.add("초보자에게 부담이 낮은 구조");
+
+                if ("yes".equals(salaryTransfer) && accountSignals.contains("salary")) {
+                    score += accountScore.getSalaryTransferWeight();
+                    reasons.add("급여이체 조건 충족 시 우대 혜택 가능");
                 }
-                if ("travel".equals(priority) && tags.contains("travel")) {
-                    score += 22;
-                    reasons.add("해외 사용 성향과 맞는 외화 혜택");
+
+                switch (priority) {
+                    case "savings" -> {
+                        if (accountSignals.contains("savings")) {
+                            score += accountScore.getPrioritySavingsWeight();
+                            reasons.add("저축/금리 우선순위와 상품 성격 일치");
+                        }
+                    }
+                    case "starter" -> {
+                        if (accountSignals.contains("starter")) {
+                            score += accountScore.getPriorityStarterWeight();
+                            reasons.add("초기 이용자 친화 조건과 일치");
+                        }
+                    }
+                    case "travel" -> {
+                        if (accountSignals.contains("travel") || accountSignals.contains("global")) {
+                            score += accountScore.getPriorityTravelWeight();
+                            reasons.add("여행/외화 중심 우선순위 반영");
+                        }
+                    }
+                    case "cashback" -> {
+                        if (accountSignals.contains("daily") || accountSignals.contains("salary")) {
+                            score += accountScore.getPriorityCashbackWeight();
+                            reasons.add("생활소비 연동형 계좌 조건과 맞음");
+                        }
+                    }
+                    default -> {
+                    }
                 }
-                if ("often".equals(travelLevel) && tags.contains("global")) {
-                    score += 28;
-                    reasons.add("해외 결제 빈도가 높아 효율적");
+
+                if ("often".equals(travelLevel)
+                    && (accountSignals.contains("global") || accountSignals.contains("travel"))) {
+                    score += accountScore.getTravelOftenGlobalWeight();
+                    reasons.add("해외 이용 빈도에 적합한 신호 확인");
                 }
-                if (request.age() <= 34 && tags.contains("young")) {
-                    score += 18;
-                    reasons.add("연령 우대 구간에 해당");
+
+                if (request.age() <= accountScore.getYoungAgeMax() && accountSignals.contains("starter")) {
+                    score += accountScore.getYoungWeight();
+                    reasons.add("연령 구간에 맞는 우대/간편형 조건");
                 }
-                if (request.monthlySpend() >= 100 && tags.contains("daily")) {
-                    score += 10;
-                    reasons.add("생활비 지출 패턴과 적합");
+
+                if (request.monthlySpend() >= accountScore.getDailySpendThreshold() && accountSignals.contains("daily")) {
+                    score += accountScore.getDailySpendWeight();
+                    reasons.add("생활비 흐름과 연결되는 계좌 패턴");
+                }
+
+                if (!matchedIntentSignals.isEmpty()) {
+                    score += matchedIntentSignals.size() * accountScore.getIntentCategoryHitWeight();
+                    reasons.add("일치 신호: " + labelsOf(matchedIntentSignals));
                 }
 
                 return new ScoredProduct(
@@ -231,9 +291,9 @@ public class RecommendationService {
     }
 
     private List<RankedProduct> rankCards(SimulateRecommendationRequest request) {
-        String priority = normalize(request.priority());
+        String priority = normalizePriority(request.priority());
         String travelLevel = normalize(request.travelLevel());
-        Set<String> categorySet = lowerSet(request.categories());
+        Set<String> userCategories = canonicalizeCategories(request.categories());
 
         List<CardCatalogEntity> candidates = cardCatalogRepository.findByActiveTrue().stream()
             .filter(candidate -> !lowerSet(candidate.getTags()).contains("stat-only"))
@@ -242,38 +302,79 @@ public class RecommendationService {
             throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "Card catalog is empty");
         }
 
+        RecommendationScoringProperties.Card cardScore = scoringProperties.resolvedCard();
+
         List<ScoredProduct> scored = candidates.stream()
             .map(candidate -> {
-                int score = 45;
+                int score = cardScore.getBaseScore();
                 List<String> reasons = new ArrayList<>();
-                Set<String> tags = lowerSet(candidate.getTags());
-                Set<String> categories = lowerSet(candidate.getCategories());
 
-                int categoryHit = (int) categories.stream().filter(categorySet::contains).count();
-                score += categoryHit * 9;
+                Set<String> tagSignals = canonicalizeCategories(candidate.getTags());
+                Set<String> cardCategories = deriveCardCategories(candidate);
+                Set<String> matchedCategories = intersection(cardCategories, userCategories);
+
+                int categoryHit = matchedCategories.size();
                 if (categoryHit > 0) {
-                    reasons.add("소비 카테고리 " + categoryHit + "개 일치");
+                    score += categoryHit * cardScore.getCategoryHitWeight();
+                    reasons.add("소비 카테고리 일치: " + labelsOf(matchedCategories));
                 }
 
-                if ("cashback".equals(priority) && tags.contains("cashback")) {
-                    score += 24;
-                    reasons.add("캐시백 우선순위와 적합");
+                switch (priority) {
+                    case "cashback" -> {
+                        if (tagSignals.contains("daily") || tagSignals.contains("online")) {
+                            score += cardScore.getPriorityCashbackWeight();
+                            reasons.add("생활 할인/캐시백 우선순위와 일치");
+                        }
+                    }
+                    case "travel" -> {
+                        if (cardCategories.contains("travel") || tagSignals.contains("travel")) {
+                            score += cardScore.getPriorityTravelWeight();
+                            reasons.add("여행/해외결제 우선순위 반영");
+                        }
+                    }
+                    case "starter" -> {
+                        if (cardCategories.contains("starter") || tagSignals.contains("starter")) {
+                            score += cardScore.getPriorityStarterWeight();
+                            reasons.add("연회비 부담 최소 선호와 일치");
+                        }
+                    }
+                    case "savings" -> {
+                        if (cardCategories.contains("daily") || tagSignals.contains("online")) {
+                            score += cardScore.getPrioritySavingsWeight();
+                            reasons.add("저축 우선순위에 맞는 고정비/생활비 절감형");
+                        }
+                    }
+                    default -> {
+                    }
                 }
-                if ("travel".equals(priority) && tags.contains("travel")) {
-                    score += 22;
-                    reasons.add("여행/해외결제 우선순위 반영");
+
+                if ("often".equals(travelLevel)
+                    && (cardCategories.contains("travel") || tagSignals.contains("travel"))) {
+                    score += cardScore.getTravelOftenWeight();
+                    reasons.add("해외 이용 빈도에 유리한 혜택 구성");
                 }
-                if ("starter".equals(priority) && tags.contains("starter")) {
-                    score += 24;
-                    reasons.add("연회비 부담 최소화 선호와 일치");
+
+                if (request.monthlySpend() >= cardScore.getDailySpendThreshold()
+                    && (tagSignals.contains("daily") || hasLifestyleCategory(cardCategories))) {
+                    score += cardScore.getDailySpendWeight();
+                    reasons.add("전월 실적 달성 가능성이 높은 소비 패턴");
                 }
-                if ("often".equals(travelLevel) && tags.contains("travel")) {
-                    score += 28;
-                    reasons.add("해외 결제 빈도에 유리");
+
+                AnnualFeeInfo annualFeeInfo = parseAnnualFee(candidate.getAnnualFeeText());
+                if (annualFeeInfo.lowFee()) {
+                    score += cardScore.getLowAnnualFeeBonusWeight();
+                    reasons.add("연회비 부담이 낮음 (" + candidate.getAnnualFeeText() + ")");
+                } else if (annualFeeInfo.estimatedWon() != null
+                    && annualFeeInfo.estimatedWon() >= cardScore.getHighAnnualFeeThresholdWon()) {
+                    score -= cardScore.getHighAnnualFeePenaltyWeight();
+                    reasons.add("연회비 수준 고려 필요 (" + candidate.getAnnualFeeText() + ")");
+                } else {
+                    reasons.add("연회비 정보 반영 (" + candidate.getAnnualFeeText() + ")");
                 }
-                if (request.monthlySpend() >= 80 && tags.contains("daily")) {
-                    score += 10;
-                    reasons.add("전월 실적 달성 가능성이 높음");
+
+                String summaryHighlight = summaryHighlight(candidate.getSummary());
+                if (!summaryHighlight.isBlank()) {
+                    reasons.add("핵심 혜택: " + summaryHighlight);
                 }
 
                 return new ScoredProduct(
@@ -385,7 +486,7 @@ public class RecommendationService {
         if (cardText.contains("카테고리") || cardText.contains("생활")) {
             bonus += 3200;
         }
-        if (cardText.contains("여행") && accountText.contains("외화")) {
+        if ((cardText.contains("여행") || cardText.contains("해외")) && accountText.contains("외화")) {
             bonus += 2800;
         }
 
@@ -410,17 +511,257 @@ public class RecommendationService {
         return joinReasons(reasons);
     }
 
-    private Set<String> lowerSet(Iterable<String> values) {
+    private Set<String> buildAccountIntentSignals(
+        SimulateRecommendationRequest request,
+        String priority,
+        String salaryTransfer,
+        String travelLevel,
+        Set<String> userCategories,
+        RecommendationScoringProperties.Account accountScore
+    ) {
+        Set<String> signals = new HashSet<>();
+
+        if ("yes".equals(salaryTransfer)) {
+            signals.add("salary");
+        }
+
+        if ("travel".equals(priority)) {
+            signals.add("travel");
+            signals.add("global");
+        } else if ("savings".equals(priority)) {
+            signals.add("savings");
+        } else if ("starter".equals(priority)) {
+            signals.add("starter");
+        } else if ("cashback".equals(priority)) {
+            signals.add("daily");
+        }
+
+        if ("often".equals(travelLevel) || "sometimes".equals(travelLevel)) {
+            signals.add("travel");
+        }
+
+        if (hasLifestyleCategory(userCategories) || request.monthlySpend() >= accountScore.getDailySpendThreshold()) {
+            signals.add("daily");
+        }
+
+        if (request.age() <= accountScore.getYoungAgeMax()) {
+            signals.add("starter");
+        }
+
+        return signals;
+    }
+
+    private Set<String> deriveAccountSignals(AccountCatalogEntity candidate) {
+        Set<String> signals = new HashSet<>();
+        signals.addAll(canonicalizeCategories(candidate.getTags()));
+        signals.addAll(extractCategoriesFromText(candidate.getProductName()));
+        signals.addAll(extractCategoriesFromText(candidate.getSummary()));
+        signals.addAll(extractCategoriesFromText(candidate.getAccountKind()));
+
+        String accountKind = normalize(candidate.getAccountKind());
+        if (accountKind.contains("예금") || accountKind.contains("적금")) {
+            signals.add("savings");
+        }
+        if (accountKind.contains("외화")) {
+            signals.add("global");
+            signals.add("travel");
+        }
+        if (accountKind.contains("입출금")) {
+            signals.add("daily");
+        }
+
+        return signals;
+    }
+
+    private Set<String> deriveCardCategories(CardCatalogEntity candidate) {
+        Set<String> categories = new HashSet<>();
+
+        categories.addAll(canonicalizeCategories(candidate.getCategories()));
+        categories.addAll(canonicalizeCategories(candidate.getTags()));
+        categories.addAll(extractCategoriesFromText(candidate.getProductName()));
+        categories.addAll(extractCategoriesFromText(candidate.getSummary()));
+
+        Set<String> tags = lowerSet(candidate.getTags());
+        if (tags.contains("travel") || tags.contains("mileage")) {
+            categories.add("travel");
+        }
+        if (tags.contains("starter") || tags.contains("no-fee") || tags.contains("nofee")) {
+            categories.add("starter");
+        }
+        if (tags.contains("daily") || tags.contains("cashback")) {
+            categories.add("daily");
+        }
+
+        return categories;
+    }
+
+    private Set<String> canonicalizeCategories(Iterable<String> values) {
         Set<String> result = new HashSet<>();
         if (values == null) {
             return result;
         }
+
         for (String value : values) {
-            if (value != null && !value.isBlank()) {
-                result.add(value.trim().toLowerCase());
-            }
+            result.addAll(canonicalizeCategoryValue(value));
         }
         return result;
+    }
+
+    private Set<String> canonicalizeCategoryValue(String raw) {
+        Set<String> result = new HashSet<>();
+        String normalized = normalize(raw);
+        if (normalized.isBlank()) {
+            return result;
+        }
+
+        // direct mapping for full token
+        String direct = CATEGORY_ALIASES.get(normalizeCategoryToken(normalized));
+        if (direct != null) {
+            result.add(direct);
+        }
+
+        // split mapping (e.g. "온라인/구독")
+        for (String part : normalized.split("[,|/\\s]+")) {
+            String mapped = CATEGORY_ALIASES.get(normalizeCategoryToken(part));
+            if (mapped != null) {
+                result.add(mapped);
+            }
+        }
+
+        // text keyword mapping fallback
+        result.addAll(extractCategoriesFromText(normalized));
+
+        return result;
+    }
+
+    private Set<String> extractCategoriesFromText(String text) {
+        Set<String> result = new HashSet<>();
+        String normalizedText = normalizeCategoryToken(text);
+        if (normalizedText.isBlank()) {
+            return result;
+        }
+
+        for (CategoryKeywordRule rule : CATEGORY_KEYWORD_RULES) {
+            for (String keyword : rule.keywords()) {
+                if (normalizedText.contains(keyword)) {
+                    result.add(rule.category());
+                    break;
+                }
+            }
+        }
+
+        return result;
+    }
+
+    private Set<String> intersection(Set<String> left, Set<String> right) {
+        if (left.isEmpty() || right.isEmpty()) {
+            return Set.of();
+        }
+
+        Set<String> intersection = new HashSet<>(left);
+        intersection.retainAll(right);
+        return intersection;
+    }
+
+    private boolean hasLifestyleCategory(Set<String> categories) {
+        return categories.contains("online")
+            || categories.contains("grocery")
+            || categories.contains("transport")
+            || categories.contains("dining")
+            || categories.contains("cafe")
+            || categories.contains("subscription")
+            || categories.contains("daily");
+    }
+
+    private RateInfo extractRateInfo(String summary) {
+        if (summary == null || summary.isBlank()) {
+            return new RateInfo(null, null);
+        }
+
+        Double maxRate = extractRate(summary, MAX_RATE_PATTERN);
+        Double baseRate = extractRate(summary, BASE_RATE_PATTERN);
+
+        return new RateInfo(maxRate, baseRate);
+    }
+
+    private Double extractRate(String text, Pattern pattern) {
+        Matcher matcher = pattern.matcher(text);
+        if (!matcher.find()) {
+            return null;
+        }
+
+        String value = matcher.group(1);
+        try {
+            return Double.parseDouble(value);
+        } catch (NumberFormatException exception) {
+            return null;
+        }
+    }
+
+    private String formatPercent(Double value) {
+        if (value == null) {
+            return "";
+        }
+
+        if (Math.abs(value - Math.rint(value)) < 0.00001) {
+            return String.format(Locale.ROOT, "%.0f", value);
+        }
+        return String.format(Locale.ROOT, "%.2f", value).replaceAll("0+$", "").replaceAll("\\.$", "");
+    }
+
+    private AnnualFeeInfo parseAnnualFee(String annualFeeText) {
+        String text = normalize(annualFeeText);
+        if (text.isBlank()) {
+            return new AnnualFeeInfo(true, null);
+        }
+
+        if (text.contains("없음") || text.contains("면제") || text.contains("무료") || text.contains("0원")) {
+            return new AnnualFeeInfo(true, 0);
+        }
+
+        Matcher manWonMatcher = ANNUAL_FEE_MAN_WON_PATTERN.matcher(text);
+        if (manWonMatcher.find()) {
+            try {
+                double manWon = Double.parseDouble(manWonMatcher.group(1));
+                int won = (int) Math.round(manWon * 10000);
+                return new AnnualFeeInfo(won <= 0, won);
+            } catch (NumberFormatException ignored) {
+                // fallback to next parser
+            }
+        }
+
+        Matcher wonMatcher = ANNUAL_FEE_WON_PATTERN.matcher(text);
+        if (wonMatcher.find()) {
+            String rawNumber = wonMatcher.group(1).replace(",", "");
+            try {
+                int won = Integer.parseInt(rawNumber);
+                return new AnnualFeeInfo(won <= 0, won);
+            } catch (NumberFormatException ignored) {
+                // ignore
+            }
+        }
+
+        return new AnnualFeeInfo(false, null);
+    }
+
+    private String summaryHighlight(String summary) {
+        String normalized = normalize(summary);
+        if (normalized.isBlank()) {
+            return "";
+        }
+
+        String compact = summary.replaceAll("\\s+", " ").trim();
+        if (compact.length() <= 48) {
+            return compact;
+        }
+        return compact.substring(0, 48) + "...";
+    }
+
+    private String labelsOf(Set<String> categories) {
+        return categories.stream()
+            .sorted()
+            .map(category -> CATEGORY_LABELS.getOrDefault(category, category))
+            .collect(Collectors.joining(", "));
     }
 
     private List<RankedProduct> assignRank(List<ScoredProduct> scoredProducts) {
@@ -495,15 +836,129 @@ public class RecommendationService {
             .toList();
     }
 
+    private Set<String> lowerSet(Iterable<String> values) {
+        Set<String> result = new HashSet<>();
+        if (values == null) {
+            return result;
+        }
+        for (String value : values) {
+            if (value != null && !value.isBlank()) {
+                result.add(value.trim().toLowerCase(Locale.ROOT));
+            }
+        }
+        return result;
+    }
+
+    private String normalizePriority(String value) {
+        String normalized = normalize(value);
+        return switch (normalized) {
+            case "cashback", "캐시백", "할인", "생활" -> "cashback";
+            case "savings", "저축", "금리" -> "savings";
+            case "travel", "여행", "해외" -> "travel";
+            case "starter", "초보", "저비용" -> "starter";
+            default -> normalized;
+        };
+    }
+
+    private String normalizeCategoryToken(String value) {
+        if (value == null) {
+            return "";
+        }
+        return value.toLowerCase(Locale.ROOT)
+            .replaceAll("[\\s_./|-]+", "")
+            .replaceAll("[^a-z0-9가-힣]", "");
+    }
+
     private String normalize(String value) {
-        return value == null ? "" : value.trim().toLowerCase();
+        return value == null ? "" : value.trim().toLowerCase(Locale.ROOT);
     }
 
     private String joinReasons(List<String> reasons) {
         if (reasons.isEmpty()) {
             return "기본 조건 기반 추천";
         }
-        return String.join(" · ", reasons.stream().limit(3).toList());
+
+        List<String> deduplicated = new ArrayList<>();
+        Set<String> seen = new HashSet<>();
+        for (String reason : reasons) {
+            String normalized = normalize(reason);
+            if (!normalized.isBlank() && seen.add(normalized)) {
+                deduplicated.add(reason);
+            }
+            if (deduplicated.size() >= 4) {
+                break;
+            }
+        }
+
+        return String.join(" · ", deduplicated);
+    }
+
+    private static Map<String, String> buildCategoryAliases() {
+        Map<String, String> aliases = new HashMap<>();
+
+        putAlias(aliases, "online", "online", "ecommerce", "shopping", "쇼핑", "온라인", "간편결제", "pay", "모바일결제");
+        putAlias(aliases, "grocery", "grocery", "mart", "supermarket", "장보기", "마트", "식자재");
+        putAlias(aliases, "transport", "transport", "traffic", "transit", "mobility", "교통", "지하철", "버스", "택시", "주유", "모빌리티");
+        putAlias(aliases, "dining", "dining", "food", "restaurant", "외식", "식당", "배달", "푸드");
+        putAlias(aliases, "cafe", "cafe", "coffee", "카페", "커피");
+        putAlias(aliases, "subscription", "subscription", "sub", "ott", "streaming", "구독", "스트리밍");
+        putAlias(aliases, "travel", "travel", "trip", "airline", "hotel", "여행", "해외", "항공", "숙박");
+        putAlias(aliases, "salary", "salary", "급여", "월급", "급여이체");
+        putAlias(aliases, "savings", "savings", "saving", "save", "저축", "금리", "예금", "적금");
+        putAlias(aliases, "starter", "starter", "beginner", "초보", "저비용", "무연회비");
+        putAlias(aliases, "daily", "daily", "생활", "일상", "cashback", "할인");
+        putAlias(aliases, "global", "global", "외화", "글로벌");
+
+        return aliases;
+    }
+
+    private static Map<String, String> buildCategoryLabels() {
+        Map<String, String> labels = new LinkedHashMap<>();
+        labels.put("online", "온라인쇼핑");
+        labels.put("grocery", "장보기/마트");
+        labels.put("transport", "교통/모빌리티");
+        labels.put("dining", "외식");
+        labels.put("cafe", "카페");
+        labels.put("subscription", "구독");
+        labels.put("travel", "여행/해외");
+        labels.put("salary", "급여/이체");
+        labels.put("savings", "저축/금리");
+        labels.put("starter", "초보자/저비용");
+        labels.put("daily", "생활소비");
+        labels.put("global", "외화/글로벌");
+        return labels;
+    }
+
+    private static List<CategoryKeywordRule> buildCategoryKeywordRules() {
+        return List.of(
+            new CategoryKeywordRule("online", Set.of("온라인", "쇼핑", "간편결제", "ecommerce", "shopping", "오픈마켓")),
+            new CategoryKeywordRule("grocery", Set.of("마트", "장보기", "슈퍼", "식자재", "생필품")),
+            new CategoryKeywordRule("transport", Set.of("교통", "지하철", "버스", "택시", "주유", "모빌리티")),
+            new CategoryKeywordRule("dining", Set.of("외식", "식당", "배달", "푸드", "레스토랑")),
+            new CategoryKeywordRule("cafe", Set.of("카페", "커피")),
+            new CategoryKeywordRule("subscription", Set.of("구독", "ott", "스트리밍", "멤버십")),
+            new CategoryKeywordRule("travel", Set.of("여행", "해외", "항공", "마일", "숙박")),
+            new CategoryKeywordRule("salary", Set.of("급여", "월급", "급여이체")),
+            new CategoryKeywordRule("savings", Set.of("저축", "금리", "적금", "예금", "복리", "우대금리")),
+            new CategoryKeywordRule("starter", Set.of("초보", "무연회비", "저비용", "신규")),
+            new CategoryKeywordRule("daily", Set.of("생활", "일상", "캐시백", "할인")),
+            new CategoryKeywordRule("global", Set.of("외화", "글로벌", "환전"))
+        );
+    }
+
+    private static void putAlias(Map<String, String> aliases, String canonical, String... variants) {
+        for (String variant : variants) {
+            aliases.put(normalizeStaticCategoryToken(variant), canonical);
+        }
+    }
+
+    private static String normalizeStaticCategoryToken(String value) {
+        if (value == null) {
+            return "";
+        }
+        return value.toLowerCase(Locale.ROOT)
+            .replaceAll("[\\s_./|-]+", "")
+            .replaceAll("[^a-z0-9가-힣]", "");
     }
 
     private record ScoredProduct(
@@ -543,5 +998,21 @@ public class RecommendationService {
         int expectedExtraMonthlyBenefit,
         String reason
     ) {
+    }
+
+    private record CategoryKeywordRule(String category, Set<String> keywords) {
+
+        private CategoryKeywordRule {
+            Set<String> normalizedKeywords = keywords.stream()
+                .map(RecommendationService::normalizeStaticCategoryToken)
+                .collect(Collectors.toSet());
+            keywords = normalizedKeywords;
+        }
+    }
+
+    private record RateInfo(Double maxRate, Double baseRate) {
+    }
+
+    private record AnnualFeeInfo(boolean lowFee, Integer estimatedWon) {
     }
 }

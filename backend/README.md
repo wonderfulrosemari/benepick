@@ -146,3 +146,18 @@ CATALOG_SYNC_ZONE=Asia/Seoul
 - 시작 시 자동 동기화만 끄기: `CATALOG_SYNC_STARTUP_ENABLED=false`
 - 계좌 동기화만 끄기: `CATALOG_SYNC_FINLIFE_ENABLED=false`
 - 정기 스케줄만 끄기: `CATALOG_SYNC_SCHEDULED_ENABLED=false`
+
+## 추천 품질 튜닝
+
+추천 점수는 `recommendation.scoring` 설정값으로 분리되어 있어 환경변수로 조정할 수 있습니다.
+
+- 프리셋: `REC_SCORING_PROFILE` (`balanced` | `conservative` | `aggressive`)
+- 계좌 가중치: `REC_SCORE_ACCOUNT_*`
+- 카드 가중치: `REC_SCORE_CARD_*`
+
+주요 개선 사항:
+- 카드/계좌 카테고리 매핑 정규화(영문/한글/요약 키워드 기반)
+- 우선순위별 가중치 분리(저축형/소비형/여행형/초보자형)
+- 추천 사유 문구에 실제 데이터 필드 반영
+  - 계좌: 요약의 금리(최고/기본), 계좌종류, 우대 신호
+  - 카드: 연회비 텍스트, 카테고리 일치, 혜택 요약 하이라이트
