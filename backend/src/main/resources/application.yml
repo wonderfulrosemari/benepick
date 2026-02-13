@@ -1,0 +1,53 @@
+spring:
+  application:
+    name: benepick-backend
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/benepick}
+    username: ${DB_USERNAME:${USER:postgres}}
+    password: ${DB_PASSWORD:}
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: update
+    properties:
+      hibernate:
+        format_sql: true
+  jackson:
+    default-property-inclusion: non_null
+
+server:
+  port: ${SERVER_PORT:8080}
+
+auth:
+  jwt:
+    secret: ${JWT_SECRET:change-this-secret-key-to-at-least-32-bytes-benepick}
+    access-token-minutes: ${JWT_ACCESS_MINUTES:15}
+    refresh-token-days: ${JWT_REFRESH_DAYS:30}
+    issuer: ${JWT_ISSUER:benepick}
+  cookie:
+    name: ${REFRESH_COOKIE_NAME:refresh_token}
+    secure: ${REFRESH_COOKIE_SECURE:false}
+    same-site: ${REFRESH_COOKIE_SAMESITE:Lax}
+    domain: ${REFRESH_COOKIE_DOMAIN:}
+  google:
+    client-id: ${GOOGLE_CLIENT_ID:}
+    jwk-set-uri: ${GOOGLE_JWK_SET_URI:https://www.googleapis.com/oauth2/v3/certs}
+
+app:
+  cors:
+    allowed-origins:
+      - ${FRONTEND_ORIGIN:http://localhost:5173}
+
+catalog:
+  finlife:
+    base-url: ${FINLIFE_BASE_URL:https://finlife.fss.or.kr/finlifeapi}
+    auth-key: ${FINLIFE_AUTH_KEY:}
+    top-fin-grp-nos:
+      - ${FINLIFE_TOP_FIN_GRP_NO:020000}
+    max-pages-per-group: ${FINLIFE_MAX_PAGES_PER_GROUP:2}
+    connect-timeout-ms: ${FINLIFE_CONNECT_TIMEOUT_MS:5000}
+    read-timeout-ms: ${FINLIFE_READ_TIMEOUT_MS:12000}
+  card-external:
+    source-url: ${CARD_EXTERNAL_SOURCE_URL:}
+    connect-timeout-ms: ${CARD_EXTERNAL_CONNECT_TIMEOUT_MS:4000}
+    read-timeout-ms: ${CARD_EXTERNAL_READ_TIMEOUT_MS:10000}

@@ -1,0 +1,22 @@
+[
+  {
+    "productKey": "hana_mobility_plus",
+    "providerName": "하나카드",
+    "productName": "모빌리티 플러스",
+    "annualFeeText": "국내전용 1.3만원",
+    "summary": "대중교통/택시/주유 중심 적립",
+    "officialUrl": "https://www.hanacard.co.kr",
+    "tags": ["cashback", "daily"],
+    "categories": ["transport", "dining"]
+  },
+  {
+    "productKey": "lotte_online_max",
+    "providerName": "롯데카드",
+    "productName": "온라인 맥스 라이트",
+    "annualFeeText": "국내전용 1.0만원",
+    "summary": "온라인쇼핑/구독 할인 특화",
+    "officialUrl": "https://www.lottecard.co.kr",
+    "tags": ["cashback", "online"],
+    "categories": ["online", "subscription", "cafe"]
+  }
+]
