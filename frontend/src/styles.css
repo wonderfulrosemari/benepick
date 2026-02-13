@@ -116,6 +116,53 @@ body {
   gap: 14px;
 }
 
+.workspace-layout {
+  display: grid;
+  grid-template-columns: minmax(340px, 420px) minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.input-panel .form-grid {
+  grid-template-columns: 1fr;
+}
+
+.workspace-layout .results {
+  margin-top: 0;
+}
+
+.product-tab-toggle {
+  display: inline-flex;
+  gap: 8px;
+  margin: 0 0 14px;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #fff;
+}
+
+.tab-button {
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--muted);
+  border-radius: 9px;
+  padding: 8px 14px;
+  font-size: 0.9rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.tab-button.is-active {
+  color: var(--brand-dark);
+  border-color: rgba(11, 142, 134, 0.32);
+  background: rgba(11, 142, 134, 0.1);
+}
+
+.tab-button:focus-visible {
+  outline: 2px solid rgba(11, 142, 134, 0.38);
+  outline-offset: 1px;
+}
+
 .form-grid label,
 .form-grid fieldset {
   display: flex;
@@ -223,6 +270,10 @@ select:focus {
   gap: 14px;
 }
 
+.result-grid.single {
+  grid-template-columns: 1fr;
+}
+
 .product-list {
   margin: 0;
   padding: 0;
@@ -293,10 +344,37 @@ select:focus {
 .summary,
 .meta,
 .reason {
-  margin: 7px 0 0;
+  margin: 9px 0 0;
   color: var(--muted);
   font-size: 0.9rem;
-  line-height: 1.5;
+  line-height: 1.65;
+}
+
+.summary.multi,
+.meta.multi,
+.reason.multi {
+  display: grid;
+  gap: 6px;
+}
+
+.text-line {
+  margin: 0;
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  line-height: 1.65;
+}
+
+.text-line-bullet {
+  color: var(--brand-dark);
+  font-weight: 800;
+  line-height: 1.45;
+}
+
+.reason {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px dashed rgba(18, 36, 63, 0.18);
 }
 
 .click-metric {
@@ -369,6 +447,7 @@ select:focus {
     gap: 5px;
   }
 
+  .workspace-layout,
   .form-grid,
   .result-grid,
   .inline-form {
@@ -484,6 +563,10 @@ select:focus {
 
 .status-strip {
   margin-bottom: 14px;
+}
+
+.bottom-status {
+  margin-top: 16px;
 }
 
 .status-title {

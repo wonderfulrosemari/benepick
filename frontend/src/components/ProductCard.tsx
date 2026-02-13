@@ -30,6 +30,7 @@ const EMPHASIS_NUMBER_TEST_REGEX = /^(최고\s*\d+(?:\.\d+)?\s*%|기본\s*\d+(?:
 const EMPHASIS_KEYWORD_SPLIT_REGEX = /(가입대상|가입조건|우대조건|우대|조건|연회비|혜택|할인|캐시백|적립|한도|전월실적|급여이체|저축|금리|최고|기본|최대|최소)/g;
 const EMPHASIS_KEYWORD_TEST_REGEX = /^(가입대상|가입조건|우대조건|우대|조건|연회비|혜택|할인|캐시백|적립|한도|전월실적|급여이체|저축|금리|최고|기본|최대|최소)$/;
 const DESCRIPTION_LIST_SPLIT_REGEX = /(?=\s*(?:\d+\.\s*[가-힣A-Za-z(]|[가-힣]\.\s*[가-힣A-Za-z(]))/g;
+const READABLE_LINE_SPLIT_REGEX = /\s*·\s*/g;
 
 type HighlightMatchers = {
   splitRegex: RegExp;
@@ -179,6 +180,20 @@ function splitDescriptionParagraphs(value: string): string[] {
     .filter(Boolean);
 }
 
+function splitReadableLines(value: string): string[] {
+  const normalized = (value ?? "").replace(/\\n/g, "\n").replace(/\r/g, "").trim();
+  if (!normalized) {
+    return [];
+  }
+
+  return normalized
+    .split(/\n+/)
+    .flatMap((line) => line.split(READABLE_LINE_SPLIT_REGEX))
+    .flatMap((line) => line.split(DESCRIPTION_LIST_SPLIT_REGEX))
+    .map((line) => line.replace(/\s+/g, " ").trim())
+    .filter(Boolean);
+}
+
 function formatSignedWon(value: number): string {
   if (value > 0) {
     return `+${value.toLocaleString()}원`;
@@ -199,7 +214,7 @@ function ProductCard({
   minExpectedMonthlyBenefit,
   expectedMonthlyBenefit,
   maxExpectedMonthlyBenefit,
-  benefitComponents = [],
+  benefitComponents: _benefitComponents = [],
   detailFields = [],
   actionLabel,
   onAction,
@@ -221,12 +236,9 @@ function ProductCard({
   );
   const hasDetails = normalizedDetails.length > 0;
 
-  const reasonPreview = useMemo(() => parseCoreReason(reason).slice(0, 3).join(" · "), [reason]);
-
-  const appliedBenefitComponents = useMemo(
-    () => benefitComponents.filter((component) => component.applied),
-    [benefitComponents]
-  );
+  const reasonPreviewLines = useMemo(() => parseCoreReason(reason).slice(0, 4), [reason]);
+  const summaryLines = useMemo(() => splitReadableLines(summary), [summary]);
+  const metaLines = useMemo(() => splitReadableLines(meta), [meta]);
 
   const clearBenefitTooltipTimer = () => {
     if (benefitTooltipTimerRef.current !== null) {
@@ -277,6 +289,36 @@ function ProductCard({
     );
   };
 
+  const renderReadableBlock = (
+    lines: string[],
+    keyPrefix: string,
+    className: string,
+    withBullet = true
+  ) => {
+    if (lines.length === 0) {
+      return null;
+    }
+
+    if (lines.length === 1) {
+      return (
+        <p className={className}>
+          {renderEmphasizedText(lines[0], `${keyPrefix}-single`, highlightMatchers)}
+        </p>
+      );
+    }
+
+    return (
+      <div className={`${className} multi`}>
+        {lines.map((line, index) => (
+          <p key={`${keyPrefix}-${index}`} className="text-line">
+            {withBullet ? <span className="text-line-bullet">•</span> : null}
+            {renderEmphasizedText(line, `${keyPrefix}-${index}`, highlightMatchers)}
+          </p>
+        ))}
+      </div>
+    );
+  };
+
   const benefitTitle = productType === "ACCOUNT" ? "계좌 기대 이득" : "카드 기대 이득";
 
   return (
@@ -308,32 +350,20 @@ function ProductCard({
                   </strong>
                 </p>
               </div>
-
-              <div className="bundle-tooltip-section">
-                <p className="bundle-tooltip-section-title">적용 항목</p>
-                {appliedBenefitComponents.length > 0 ? (
-                  <ul className="bundle-tooltip-list">
-                    {appliedBenefitComponents.map((component, index) => (
-                      <li key={`benefit-${rank}-${component.key}-${index}`}>
-                        {component.label}: {formatSignedWon(component.amountWonPerMonth)}
-                      </li>
-                    ))}
-                  </ul>
-                ) : (
-                  <p className="bundle-tooltip-empty">적용 항목 정보가 없습니다.</p>
-                )}
-              </div>
             </div>
           ) : null}
         </div>
       </div>
+
       <h4>{title}</h4>
+
       {typeof clickCount === "number" && typeof clickRatePercent === "number" ? (
         <p className="click-metric">클릭 {clickCount}회 · 클릭률 {clickRatePercent.toFixed(1)}%</p>
       ) : null}
-      <p className="summary">{renderEmphasizedText(summary, `summary-${rank}`, highlightMatchers)}</p>
-      <p className="meta">{renderEmphasizedText(meta, `meta-${rank}`, highlightMatchers)}</p>
-      <p className="reason">{renderEmphasizedText(reasonPreview, `reason-${rank}`, highlightMatchers)}</p>
+
+      {renderReadableBlock(summaryLines, `summary-${rank}`, "summary", false)}
+      {renderReadableBlock(metaLines, `meta-${rank}`, "meta", false)}
+      {renderReadableBlock(reasonPreviewLines, `reason-${rank}`, "reason", true)}
 
       <div className="card-actions">
         {hasDetails ? (
