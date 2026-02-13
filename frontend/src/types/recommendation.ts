@@ -1,4 +1,6 @@
-export type Priority = "cashback" | "savings" | "travel" | "starter";
+export type Priority = "cashback" | "savings" | "travel" | "starter" | "salary" | "annualfee";
+export type AccountPriority = "savings" | "salary" | "starter" | "travel" | "cashback";
+export type CardPriority = "cashback" | "annualfee" | "travel" | "starter" | "savings";
 export type TravelLevel = "none" | "sometimes" | "often";
 
 export type SimulateRecommendationRequest = {
@@ -6,9 +8,25 @@ export type SimulateRecommendationRequest = {
   income: number;
   monthlySpend: number;
   priority: Priority;
+  accountPriority: AccountPriority;
+  cardPriority: CardPriority;
   salaryTransfer: "yes" | "no";
   travelLevel: TravelLevel;
   categories: string[];
+};
+
+export type RecommendationDetailField = {
+  label: string;
+  value: string;
+  link: boolean;
+};
+
+export type RecommendationBundleBenefitComponent = {
+  key: string;
+  label: string;
+  condition: string;
+  amountWonPerMonth: number;
+  applied: boolean;
 };
 
 export type RecommendationItem = {
@@ -21,6 +39,12 @@ export type RecommendationItem = {
   meta: string;
   score: number;
   reason: string;
+  minExpectedMonthlyBenefit: number;
+  expectedMonthlyBenefit: number;
+  maxExpectedMonthlyBenefit: number;
+  estimateMethod: string;
+  benefitComponents: RecommendationBundleBenefitComponent[];
+  detailFields: RecommendationDetailField[];
 };
 
 export type RecommendationBundle = {
@@ -30,7 +54,14 @@ export type RecommendationBundle = {
   accountLabel: string;
   cardProductId: string;
   cardLabel: string;
+  minExtraMonthlyBenefit: number;
   expectedExtraMonthlyBenefit: number;
+  maxExtraMonthlyBenefit: number;
+  accountExpectedExtraMonthlyBenefit: number;
+  cardExpectedExtraMonthlyBenefit: number;
+  synergyExtraMonthlyBenefit: number;
+  estimateMethod: string;
+  benefitComponents: RecommendationBundleBenefitComponent[];
   reason: string;
 };
 

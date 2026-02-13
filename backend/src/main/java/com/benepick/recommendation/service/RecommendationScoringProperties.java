@@ -30,6 +30,7 @@ public class RecommendationScoringProperties {
                 resolved.setPriorityStarterWeight(scale(resolved.getPriorityStarterWeight(), 0.85));
                 resolved.setPriorityTravelWeight(scale(resolved.getPriorityTravelWeight(), 0.85));
                 resolved.setPriorityCashbackWeight(scale(resolved.getPriorityCashbackWeight(), 0.85));
+                resolved.setPrioritySalaryWeight(scale(resolved.getPrioritySalaryWeight(), 0.85));
                 resolved.setHighRateBonusWeight(scale(resolved.getHighRateBonusWeight(), 0.85));
             }
             case "aggressive" -> {
@@ -42,6 +43,7 @@ public class RecommendationScoringProperties {
                 resolved.setPriorityStarterWeight(scale(resolved.getPriorityStarterWeight(), 1.20));
                 resolved.setPriorityTravelWeight(scale(resolved.getPriorityTravelWeight(), 1.20));
                 resolved.setPriorityCashbackWeight(scale(resolved.getPriorityCashbackWeight(), 1.20));
+                resolved.setPrioritySalaryWeight(scale(resolved.getPrioritySalaryWeight(), 1.20));
                 resolved.setHighRateBonusWeight(scale(resolved.getHighRateBonusWeight(), 1.20));
             }
             default -> {
@@ -59,6 +61,7 @@ public class RecommendationScoringProperties {
                 resolved.setPriorityTravelWeight(scale(resolved.getPriorityTravelWeight(), 0.85));
                 resolved.setPriorityStarterWeight(scale(resolved.getPriorityStarterWeight(), 0.85));
                 resolved.setPrioritySavingsWeight(scale(resolved.getPrioritySavingsWeight(), 0.85));
+                resolved.setPriorityAnnualFeeWeight(scale(resolved.getPriorityAnnualFeeWeight(), 0.85));
                 resolved.setTravelOftenWeight(scale(resolved.getTravelOftenWeight(), 0.85));
                 resolved.setDailySpendWeight(scale(resolved.getDailySpendWeight(), 0.85));
                 resolved.setLowAnnualFeeBonusWeight(scale(resolved.getLowAnnualFeeBonusWeight(), 0.90));
@@ -71,6 +74,7 @@ public class RecommendationScoringProperties {
                 resolved.setPriorityTravelWeight(scale(resolved.getPriorityTravelWeight(), 1.20));
                 resolved.setPriorityStarterWeight(scale(resolved.getPriorityStarterWeight(), 1.20));
                 resolved.setPrioritySavingsWeight(scale(resolved.getPrioritySavingsWeight(), 1.20));
+                resolved.setPriorityAnnualFeeWeight(scale(resolved.getPriorityAnnualFeeWeight(), 1.20));
                 resolved.setTravelOftenWeight(scale(resolved.getTravelOftenWeight(), 1.20));
                 resolved.setDailySpendWeight(scale(resolved.getDailySpendWeight(), 1.20));
                 resolved.setLowAnnualFeeBonusWeight(scale(resolved.getLowAnnualFeeBonusWeight(), 1.15));
@@ -115,6 +119,8 @@ public class RecommendationScoringProperties {
 
         private int priorityCashbackWeight = 14;
 
+        private int prioritySalaryWeight = 30;
+
         private int highRateBonusWeight = 8;
 
         private int youngAgeMax = 34;
@@ -135,6 +141,7 @@ public class RecommendationScoringProperties {
             copy.priorityStarterWeight = this.priorityStarterWeight;
             copy.priorityTravelWeight = this.priorityTravelWeight;
             copy.priorityCashbackWeight = this.priorityCashbackWeight;
+            copy.prioritySalaryWeight = this.prioritySalaryWeight;
             copy.highRateBonusWeight = this.highRateBonusWeight;
             copy.youngAgeMax = this.youngAgeMax;
             copy.dailySpendThreshold = this.dailySpendThreshold;
@@ -159,6 +166,8 @@ public class RecommendationScoringProperties {
 
         private int prioritySavingsWeight = 14;
 
+        private int priorityAnnualFeeWeight = 26;
+
         private int travelOftenWeight = 28;
 
         private int dailySpendWeight = 10;
@@ -179,6 +188,7 @@ public class RecommendationScoringProperties {
             copy.priorityTravelWeight = this.priorityTravelWeight;
             copy.priorityStarterWeight = this.priorityStarterWeight;
             copy.prioritySavingsWeight = this.prioritySavingsWeight;
+            copy.priorityAnnualFeeWeight = this.priorityAnnualFeeWeight;
             copy.travelOftenWeight = this.travelOftenWeight;
             copy.dailySpendWeight = this.dailySpendWeight;
             copy.lowAnnualFeeBonusWeight = this.lowAnnualFeeBonusWeight;

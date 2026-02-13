@@ -34,19 +34,22 @@ public class CatalogSyncService {
     private final FinlifeApiClient finlifeApiClient;
     private final FinlifeProperties finlifeProperties;
     private final CardExternalApiClient cardExternalApiClient;
+    private final ProductUrlOverrideService productUrlOverrideService;
 
     public CatalogSyncService(
         AccountCatalogRepository accountCatalogRepository,
         CardCatalogRepository cardCatalogRepository,
         FinlifeApiClient finlifeApiClient,
         FinlifeProperties finlifeProperties,
-        CardExternalApiClient cardExternalApiClient
+        CardExternalApiClient cardExternalApiClient,
+        ProductUrlOverrideService productUrlOverrideService
     ) {
         this.accountCatalogRepository = accountCatalogRepository;
         this.cardCatalogRepository = cardCatalogRepository;
         this.finlifeApiClient = finlifeApiClient;
         this.finlifeProperties = finlifeProperties;
         this.cardExternalApiClient = cardExternalApiClient;
+        this.productUrlOverrideService = productUrlOverrideService;
     }
 
     @Transactional(readOnly = true)
@@ -82,6 +85,7 @@ public class CatalogSyncService {
         int upserted = 0;
         int skipped = 0;
         Set<String> activeFinlifeKeys = new HashSet<>();
+        Map<String, String> officialUrlOverrides = productUrlOverrideService.loadOverrides();
 
         for (FinlifeProduct product : fetchedProducts) {
             if (product.productCode().isBlank() || product.providerName().isBlank() || product.productName().isBlank()) {
@@ -99,7 +103,14 @@ public class CatalogSyncService {
 
             Set<String> tags = buildTags(product);
             String summary = buildSummary(product);
-            String officialUrl = resolveOfficialUrl(product.finCoNo(), companyUrls);
+            String officialUrl = productUrlOverrideService.resolveOfficialUrl(
+                productKey,
+                "ACCOUNT",
+                product.providerName(),
+                product.productName(),
+                resolveOfficialUrl(product.finCoNo(), companyUrls),
+                officialUrlOverrides
+            );
 
             Optional<AccountCatalogEntity> existing = accountCatalogRepository.findByProductKey(productKey);
             if (existing.isPresent()) {
@@ -149,6 +160,7 @@ public class CatalogSyncService {
         int upserted = 0;
         int skipped = 0;
         Set<String> activeKeys = new HashSet<>();
+        Map<String, String> officialUrlOverrides = productUrlOverrideService.loadOverrides();
 
         for (CardExternalApiClient.ExternalCardProduct product : fetchedProducts) {
             String externalKey = safe(product.productKey());
@@ -176,9 +188,16 @@ public class CatalogSyncService {
                 ? "외부 카드 데이터 동기화"
                 : safe(product.summary());
 
-            String officialUrl = normalizeUrl(
-                safe(product.officialUrl()).isBlank() ? CARD_EXTERNAL_FALLBACK_URL : product.officialUrl(),
-                CARD_EXTERNAL_FALLBACK_URL
+            String officialUrl = productUrlOverrideService.resolveOfficialUrl(
+                productKey,
+                "CARD",
+                safe(product.providerName()),
+                safe(product.productName()),
+                normalizeUrl(
+                    safe(product.officialUrl()).isBlank() ? CARD_EXTERNAL_FALLBACK_URL : product.officialUrl(),
+                    CARD_EXTERNAL_FALLBACK_URL
+                ),
+                officialUrlOverrides
             );
 
             Optional<CardCatalogEntity> existing = cardCatalogRepository.findByProductKey(productKey);
@@ -397,8 +416,8 @@ public class CatalogSyncService {
         }
 
         String conditionText = firstNonBlank(
-            shorten(product.specialCondition(), 90),
-            shorten(product.etcNote(), 90),
+            normalizeSummarySource(product.specialCondition()),
+            normalizeSummarySource(product.etcNote()),
             "우대조건은 상품설명서를 확인"
         );
 
@@ -430,12 +449,12 @@ public class CatalogSyncService {
         return false;
     }
 
-    private String shorten(String value, int maxLength) {
-        String normalized = value == null ? "" : value.replace('\n', ' ').trim();
-        if (normalized.length() <= maxLength) {
-            return normalized;
+    private String normalizeSummarySource(String value) {
+        if (value == null) {
+            return "";
         }
-        return normalized.substring(0, maxLength) + "...";
+
+        return value.replaceAll("\\s+", " ").trim();
     }
 
     private String composeRateKey(String finCoNo, String productCode) {

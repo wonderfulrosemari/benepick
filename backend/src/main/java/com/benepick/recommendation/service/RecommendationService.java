@@ -1,6 +1,8 @@
 package com.benepick.recommendation.service;
 
+import com.benepick.recommendation.dto.RecommendationBundleBenefitComponentResponse;
 import com.benepick.recommendation.dto.RecommendationBundleResponse;
+import com.benepick.recommendation.dto.RecommendationDetailFieldResponse;
 import com.benepick.recommendation.dto.RecommendationItemResponse;
 import com.benepick.recommendation.dto.RecommendationRedirectRequest;
 import com.benepick.recommendation.dto.RecommendationRedirectResponse;
@@ -17,10 +19,13 @@ import com.benepick.recommendation.repository.CardCatalogRepository;
 import com.benepick.recommendation.repository.RecommendationItemRepository;
 import com.benepick.recommendation.repository.RecommendationRedirectEventRepository;
 import com.benepick.recommendation.repository.RecommendationRunRepository;
+import java.net.URI;
+import java.net.URISyntaxException;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -43,6 +48,27 @@ public class RecommendationService {
     private static final Pattern BASE_RATE_PATTERN = Pattern.compile("기본\\s*([0-9]+(?:\\.[0-9]+)?)\\s*%");
     private static final Pattern ANNUAL_FEE_MAN_WON_PATTERN = Pattern.compile("([0-9]+(?:\\.[0-9]+)?)\\s*만원");
     private static final Pattern ANNUAL_FEE_WON_PATTERN = Pattern.compile("([0-9]{1,3}(?:,[0-9]{3})+|[0-9]{4,7})\\s*원?");
+    private static final Pattern CARD_PERCENT_PATTERN = Pattern.compile("([0-9]+(?:\\.[0-9]+)?)\\s*%");
+    private static final Pattern CARD_AMOUNT_PATTERN = Pattern.compile(
+        "(월\\s*최대\\s*[0-9]+(?:,[0-9]{3})*(?:\\.[0-9]+)?\\s*(?:만원|원)|"
+            + "최대\\s*[0-9]+(?:,[0-9]{3})*(?:\\.[0-9]+)?\\s*(?:만원|원)|"
+            + "[0-9]+(?:,[0-9]{3})*(?:\\.[0-9]+)?\\s*(?:만원|원))"
+    );
+    private static final Set<String> CARD_BENEFIT_KEYWORDS = Set.of(
+        "할인",
+        "캐시백",
+        "적립",
+        "청구",
+        "환급",
+        "포인트",
+        "마일",
+        "리워드",
+        "혜택",
+        "우대",
+        "한도",
+        "최대",
+        "월"
+    );
 
     private static final Map<String, String> CATEGORY_ALIASES = buildCategoryAliases();
     private static final Map<String, String> CATEGORY_LABELS = buildCategoryLabels();
@@ -54,6 +80,7 @@ public class RecommendationService {
     private final AccountCatalogRepository accountCatalogRepository;
     private final CardCatalogRepository cardCatalogRepository;
     private final RecommendationScoringProperties scoringProperties;
+    private final ProductUrlOverrideService productUrlOverrideService;
 
     public RecommendationService(
         RecommendationRunRepository recommendationRunRepository,
@@ -61,7 +88,8 @@ public class RecommendationService {
         RecommendationRedirectEventRepository recommendationRedirectEventRepository,
         AccountCatalogRepository accountCatalogRepository,
         CardCatalogRepository cardCatalogRepository,
-        RecommendationScoringProperties scoringProperties
+        RecommendationScoringProperties scoringProperties,
+        ProductUrlOverrideService productUrlOverrideService
     ) {
         this.recommendationRunRepository = recommendationRunRepository;
         this.recommendationItemRepository = recommendationItemRepository;
@@ -69,12 +97,14 @@ public class RecommendationService {
         this.accountCatalogRepository = accountCatalogRepository;
         this.cardCatalogRepository = cardCatalogRepository;
         this.scoringProperties = scoringProperties;
+        this.productUrlOverrideService = productUrlOverrideService;
     }
 
     @Transactional
     public RecommendationRunResponse simulate(SimulateRecommendationRequest request) {
-        List<RankedProduct> rankedAccounts = rankAccounts(request);
-        List<RankedProduct> rankedCards = rankCards(request);
+        Map<String, String> officialUrlOverrides = productUrlOverrideService.loadOverrides();
+        List<RankedProduct> rankedAccounts = rankAccounts(request, officialUrlOverrides);
+        List<RankedProduct> rankedCards = rankCards(request, officialUrlOverrides);
 
         int expectedNetMonthlyProfit = estimateNetMonthlyProfit(rankedAccounts, rankedCards);
 
@@ -100,7 +130,7 @@ public class RecommendationService {
             expectedNetMonthlyProfit,
             accounts,
             cards,
-            buildBundles(accounts, cards)
+            List.of()
         );
     }
 
@@ -113,16 +143,18 @@ public class RecommendationService {
         List<RecommendationItemEntity> items = recommendationItemRepository
             .findByRecommendationRun_IdOrderByProductTypeAscRankAsc(runId);
 
+        Map<String, String> officialUrlOverrides = productUrlOverrideService.loadOverrides();
+
         List<RecommendationItemResponse> accounts = items.stream()
             .filter(item -> "ACCOUNT".equals(item.getProductType()))
             .sorted(Comparator.comparingInt(RecommendationItemEntity::getRank))
-            .map(this::toItemResponse)
+            .map(item -> toItemResponse(item, officialUrlOverrides))
             .toList();
 
         List<RecommendationItemResponse> cards = items.stream()
             .filter(item -> "CARD".equals(item.getProductType()))
             .sorted(Comparator.comparingInt(RecommendationItemEntity::getRank))
-            .map(this::toItemResponse)
+            .map(item -> toItemResponse(item, officialUrlOverrides))
             .toList();
 
         return new RecommendationRunResponse(
@@ -131,7 +163,7 @@ public class RecommendationService {
             run.getExpectedNetMonthlyProfit(),
             accounts,
             cards,
-            buildBundles(accounts, cards)
+            List.of()
         );
     }
 
@@ -170,22 +202,68 @@ public class RecommendationService {
             .findByRecommendationRun_IdAndProductTypeAndProductId(runId, normalizedType, request.productId())
             .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Recommendation item not found"));
 
+        Map<String, String> officialUrlOverrides = productUrlOverrideService.loadOverrides();
+        String resolvedOfficialUrl = resolveRedirectOfficialUrl(item, normalizedType, officialUrlOverrides);
+
         RecommendationRedirectEventEntity event = new RecommendationRedirectEventEntity(
             runId,
             normalizedType,
             request.productId(),
-            item.getOfficialUrl(),
+            resolvedOfficialUrl,
             userAgent,
             ipAddress,
             referrer
         );
         recommendationRedirectEventRepository.save(event);
 
-        return new RecommendationRedirectResponse(item.getOfficialUrl());
+        return new RecommendationRedirectResponse(resolvedOfficialUrl);
     }
 
-    private List<RankedProduct> rankAccounts(SimulateRecommendationRequest request) {
-        String priority = normalizePriority(request.priority());
+    private String resolveRedirectOfficialUrl(
+        RecommendationItemEntity item,
+        String productType,
+        Map<String, String> officialUrlOverrides
+    ) {
+        String catalogUrl = resolveCatalogOfficialUrl(item, productType);
+        String resolvedOfficialUrl = resolveOfficialUrlForProduct(
+            item.getProductId(),
+            productType,
+            item.getProviderName(),
+            item.getProductName(),
+            catalogUrl,
+            officialUrlOverrides
+        );
+        return resolveOfficialLinkPlan(
+            productType,
+            item.getProviderName(),
+            item.getProductName(),
+            resolvedOfficialUrl
+        ).redirectUrl();
+    }
+
+    private String resolveCatalogOfficialUrl(RecommendationItemEntity item, String productType) {
+        if ("ACCOUNT".equals(productType)) {
+            return accountCatalogRepository.findByProductKey(item.getProductId())
+                .map(AccountCatalogEntity::getOfficialUrl)
+                .filter(url -> !normalize(url).isBlank())
+                .orElse(item.getOfficialUrl());
+        }
+
+        if ("CARD".equals(productType)) {
+            return cardCatalogRepository.findByProductKey(item.getProductId())
+                .map(CardCatalogEntity::getOfficialUrl)
+                .filter(url -> !normalize(url).isBlank())
+                .orElse(item.getOfficialUrl());
+        }
+
+        return item.getOfficialUrl();
+    }
+
+    private List<RankedProduct> rankAccounts(
+        SimulateRecommendationRequest request,
+        Map<String, String> officialUrlOverrides
+    ) {
+        String priority = resolveAccountPriority(request);
         String salaryTransfer = normalize(request.salaryTransfer());
         String travelLevel = normalize(request.travelLevel());
         Set<String> userCategories = canonicalizeCategories(request.categories());
@@ -201,6 +279,8 @@ public class RecommendationService {
             .map(candidate -> {
                 int score = accountScore.getBaseScore();
                 List<String> reasons = new ArrayList<>();
+                List<ScoreReasonPart> scoreParts = new ArrayList<>();
+                addScorePart(scoreParts, "기본점수", accountScore.getBaseScore());
 
                 Set<String> accountSignals = deriveAccountSignals(candidate);
                 Set<String> matchedIntentSignals = intersection(accountSignals, accountIntentSignals);
@@ -209,7 +289,9 @@ public class RecommendationService {
                 if (rateInfo.maxRate() != null) {
                     reasons.add("최고 금리 " + formatPercent(rateInfo.maxRate()) + "% (상품 요약 기준)");
                     if (rateInfo.maxRate() >= accountScore.getHighRateThreshold()) {
-                        score += accountScore.getHighRateBonusWeight();
+                        int bonus = accountScore.getHighRateBonusWeight();
+                        score += bonus;
+                        addScorePart(scoreParts, "고금리 보너스", bonus);
                     }
                 }
                 if (rateInfo.baseRate() != null) {
@@ -217,32 +299,50 @@ public class RecommendationService {
                 }
 
                 if ("yes".equals(salaryTransfer) && accountSignals.contains("salary")) {
-                    score += accountScore.getSalaryTransferWeight();
+                    int bonus = accountScore.getSalaryTransferWeight();
+                    score += bonus;
+                    addScorePart(scoreParts, "급여이체 우대", bonus);
                     reasons.add("급여이체 조건 충족 시 우대 혜택 가능");
                 }
 
                 switch (priority) {
                     case "savings" -> {
                         if (accountSignals.contains("savings")) {
-                            score += accountScore.getPrioritySavingsWeight();
+                            int bonus = accountScore.getPrioritySavingsWeight();
+                            score += bonus;
+                            addScorePart(scoreParts, "우선순위(저축/금리)", bonus);
                             reasons.add("저축/금리 우선순위와 상품 성격 일치");
+                        }
+                    }
+                    case "salary" -> {
+                        if (accountSignals.contains("salary")) {
+                            int bonus = accountScore.getPrioritySalaryWeight();
+                            score += bonus;
+                            addScorePart(scoreParts, "우선순위(급여이체/주거래)", bonus);
+                            reasons.add("급여이체/주거래 중심 우선순위와 일치");
                         }
                     }
                     case "starter" -> {
                         if (accountSignals.contains("starter")) {
-                            score += accountScore.getPriorityStarterWeight();
+                            int bonus = accountScore.getPriorityStarterWeight();
+                            score += bonus;
+                            addScorePart(scoreParts, "우선순위(초보/저비용)", bonus);
                             reasons.add("초기 이용자 친화 조건과 일치");
                         }
                     }
                     case "travel" -> {
                         if (accountSignals.contains("travel") || accountSignals.contains("global")) {
-                            score += accountScore.getPriorityTravelWeight();
+                            int bonus = accountScore.getPriorityTravelWeight();
+                            score += bonus;
+                            addScorePart(scoreParts, "우선순위(여행/해외)", bonus);
                             reasons.add("여행/외화 중심 우선순위 반영");
                         }
                     }
                     case "cashback" -> {
                         if (accountSignals.contains("daily") || accountSignals.contains("salary")) {
-                            score += accountScore.getPriorityCashbackWeight();
+                            int bonus = accountScore.getPriorityCashbackWeight();
+                            score += bonus;
+                            addScorePart(scoreParts, "우선순위(생활할인)", bonus);
                             reasons.add("생활소비 연동형 계좌 조건과 맞음");
                         }
                     }
@@ -252,24 +352,55 @@ public class RecommendationService {
 
                 if ("often".equals(travelLevel)
                     && (accountSignals.contains("global") || accountSignals.contains("travel"))) {
-                    score += accountScore.getTravelOftenGlobalWeight();
+                    int bonus = accountScore.getTravelOftenGlobalWeight();
+                    score += bonus;
+                    addScorePart(scoreParts, "해외 이용 빈도", bonus);
                     reasons.add("해외 이용 빈도에 적합한 신호 확인");
                 }
 
                 if (request.age() <= accountScore.getYoungAgeMax() && accountSignals.contains("starter")) {
-                    score += accountScore.getYoungWeight();
+                    int bonus = accountScore.getYoungWeight();
+                    score += bonus;
+                    addScorePart(scoreParts, "연령 우대", bonus);
                     reasons.add("연령 구간에 맞는 우대/간편형 조건");
                 }
 
                 if (request.monthlySpend() >= accountScore.getDailySpendThreshold() && accountSignals.contains("daily")) {
-                    score += accountScore.getDailySpendWeight();
+                    int bonus = accountScore.getDailySpendWeight();
+                    score += bonus;
+                    addScorePart(scoreParts, "생활비 흐름 매칭", bonus);
                     reasons.add("생활비 흐름과 연결되는 계좌 패턴");
                 }
 
                 if (!matchedIntentSignals.isEmpty()) {
-                    score += matchedIntentSignals.size() * accountScore.getIntentCategoryHitWeight();
+                    int bonus = matchedIntentSignals.size() * accountScore.getIntentCategoryHitWeight();
+                    score += bonus;
+                    addScorePart(scoreParts, "의도 신호 일치 x" + matchedIntentSignals.size(), bonus);
                     reasons.add("일치 신호: " + labelsOf(matchedIntentSignals));
                 }
+
+                int finalScore = Math.max(0, score);
+                String reasonText = buildReasonWithScore(
+                    scoreParts,
+                    reasons,
+                    finalScore,
+                    "총점 동점 시 기관명/상품명 순"
+                );
+                ProductBenefitEstimate benefitEstimate = estimateProductBenefit(
+                    "ACCOUNT",
+                    finalScore,
+                    scoreParts,
+                    reasonText
+                );
+
+                String resolvedOfficialUrl = resolveOfficialUrlForProduct(
+                    candidate.getProductKey(),
+                    "ACCOUNT",
+                    candidate.getProviderName(),
+                    candidate.getProductName(),
+                    candidate.getOfficialUrl(),
+                    officialUrlOverrides
+                );
 
                 return new ScoredProduct(
                     "ACCOUNT",
@@ -278,20 +409,31 @@ public class RecommendationService {
                     candidate.getProductName(),
                     candidate.getSummary(),
                     candidate.getAccountKind() + " 계좌",
-                    Math.max(0, score),
-                    joinReasons(reasons),
-                    candidate.getOfficialUrl()
+                    finalScore,
+                    reasonText,
+                    benefitEstimate.minExpectedMonthlyBenefit(),
+                    benefitEstimate.expectedMonthlyBenefit(),
+                    benefitEstimate.maxExpectedMonthlyBenefit(),
+                    benefitEstimate.estimateMethod(),
+                    benefitEstimate.benefitComponents(),
+                    resolvedOfficialUrl,
+                    buildAccountDetailFields(candidate, resolvedOfficialUrl)
                 );
             })
-            .sorted(Comparator.comparingInt(ScoredProduct::score).reversed())
+            .sorted(Comparator.comparingInt(ScoredProduct::score).reversed()
+                .thenComparing(ScoredProduct::provider)
+                .thenComparing(ScoredProduct::name))
             .limit(3)
             .toList();
 
         return assignRank(scored);
     }
 
-    private List<RankedProduct> rankCards(SimulateRecommendationRequest request) {
-        String priority = normalizePriority(request.priority());
+    private List<RankedProduct> rankCards(
+        SimulateRecommendationRequest request,
+        Map<String, String> officialUrlOverrides
+    ) {
+        String priority = resolveCardPriority(request);
         String travelLevel = normalize(request.travelLevel());
         Set<String> userCategories = canonicalizeCategories(request.categories());
 
@@ -308,6 +450,8 @@ public class RecommendationService {
             .map(candidate -> {
                 int score = cardScore.getBaseScore();
                 List<String> reasons = new ArrayList<>();
+                List<ScoreReasonPart> scoreParts = new ArrayList<>();
+                addScorePart(scoreParts, "기본점수", cardScore.getBaseScore());
 
                 Set<String> tagSignals = canonicalizeCategories(candidate.getTags());
                 Set<String> cardCategories = deriveCardCategories(candidate);
@@ -315,32 +459,42 @@ public class RecommendationService {
 
                 int categoryHit = matchedCategories.size();
                 if (categoryHit > 0) {
-                    score += categoryHit * cardScore.getCategoryHitWeight();
+                    int bonus = categoryHit * cardScore.getCategoryHitWeight();
+                    score += bonus;
+                    addScorePart(scoreParts, "카테고리 일치 x" + categoryHit, bonus);
                     reasons.add("소비 카테고리 일치: " + labelsOf(matchedCategories));
                 }
 
                 switch (priority) {
                     case "cashback" -> {
                         if (tagSignals.contains("daily") || tagSignals.contains("online")) {
-                            score += cardScore.getPriorityCashbackWeight();
+                            int bonus = cardScore.getPriorityCashbackWeight();
+                            score += bonus;
+                            addScorePart(scoreParts, "우선순위(생활할인)", bonus);
                             reasons.add("생활 할인/캐시백 우선순위와 일치");
                         }
                     }
                     case "travel" -> {
                         if (cardCategories.contains("travel") || tagSignals.contains("travel")) {
-                            score += cardScore.getPriorityTravelWeight();
+                            int bonus = cardScore.getPriorityTravelWeight();
+                            score += bonus;
+                            addScorePart(scoreParts, "우선순위(여행/해외)", bonus);
                             reasons.add("여행/해외결제 우선순위 반영");
                         }
                     }
                     case "starter" -> {
                         if (cardCategories.contains("starter") || tagSignals.contains("starter")) {
-                            score += cardScore.getPriorityStarterWeight();
+                            int bonus = cardScore.getPriorityStarterWeight();
+                            score += bonus;
+                            addScorePart(scoreParts, "우선순위(초보/저비용)", bonus);
                             reasons.add("연회비 부담 최소 선호와 일치");
                         }
                     }
                     case "savings" -> {
                         if (cardCategories.contains("daily") || tagSignals.contains("online")) {
-                            score += cardScore.getPrioritySavingsWeight();
+                            int bonus = cardScore.getPrioritySavingsWeight();
+                            score += bonus;
+                            addScorePart(scoreParts, "우선순위(저축/절감)", bonus);
                             reasons.add("저축 우선순위에 맞는 고정비/생활비 절감형");
                         }
                     }
@@ -350,32 +504,82 @@ public class RecommendationService {
 
                 if ("often".equals(travelLevel)
                     && (cardCategories.contains("travel") || tagSignals.contains("travel"))) {
-                    score += cardScore.getTravelOftenWeight();
+                    int bonus = cardScore.getTravelOftenWeight();
+                    score += bonus;
+                    addScorePart(scoreParts, "해외 이용 빈도", bonus);
                     reasons.add("해외 이용 빈도에 유리한 혜택 구성");
                 }
 
                 if (request.monthlySpend() >= cardScore.getDailySpendThreshold()
                     && (tagSignals.contains("daily") || hasLifestyleCategory(cardCategories))) {
-                    score += cardScore.getDailySpendWeight();
+                    int bonus = cardScore.getDailySpendWeight();
+                    score += bonus;
+                    addScorePart(scoreParts, "전월실적 달성 가능성", bonus);
                     reasons.add("전월 실적 달성 가능성이 높은 소비 패턴");
                 }
 
-                AnnualFeeInfo annualFeeInfo = parseAnnualFee(candidate.getAnnualFeeText());
+                String normalizedAnnualFeeText = normalizeAnnualFeeText(candidate.getAnnualFeeText());
+                AnnualFeeInfo annualFeeInfo = parseAnnualFee(normalizedAnnualFeeText);
                 if (annualFeeInfo.lowFee()) {
-                    score += cardScore.getLowAnnualFeeBonusWeight();
-                    reasons.add("연회비 부담이 낮음 (" + candidate.getAnnualFeeText() + ")");
+                    int bonus = cardScore.getLowAnnualFeeBonusWeight();
+                    score += bonus;
+                    addScorePart(scoreParts, "연회비 저부담", bonus);
+                    reasons.add("연회비 부담이 낮음 (" + normalizedAnnualFeeText + ")");
                 } else if (annualFeeInfo.estimatedWon() != null
                     && annualFeeInfo.estimatedWon() >= cardScore.getHighAnnualFeeThresholdWon()) {
-                    score -= cardScore.getHighAnnualFeePenaltyWeight();
-                    reasons.add("연회비 수준 고려 필요 (" + candidate.getAnnualFeeText() + ")");
+                    int penalty = cardScore.getHighAnnualFeePenaltyWeight();
+                    score -= penalty;
+                    addScorePart(scoreParts, "연회비 패널티", -penalty);
+                    reasons.add("연회비 수준 고려 필요 (" + normalizedAnnualFeeText + ")");
                 } else {
-                    reasons.add("연회비 정보 반영 (" + candidate.getAnnualFeeText() + ")");
+                    reasons.add("연회비 정보 반영 (" + normalizedAnnualFeeText + ")");
+                }
+
+                if ("annualfee".equals(priority)) {
+                    if (annualFeeInfo.lowFee()) {
+                        int bonus = cardScore.getPriorityAnnualFeeWeight();
+                        score += bonus;
+                        addScorePart(scoreParts, "우선순위(연회비 절감)", bonus);
+                        reasons.add("연회비 절감 우선순위와 일치");
+                    } else if (annualFeeInfo.estimatedWon() != null
+                        && annualFeeInfo.estimatedWon() >= cardScore.getHighAnnualFeeThresholdWon()) {
+                        int penalty = Math.max(1, cardScore.getPriorityAnnualFeeWeight() / 2);
+                        score -= penalty;
+                        addScorePart(scoreParts, "우선순위(연회비 절감) 패널티", -penalty);
+                        reasons.add("연회비 절감 우선순위 대비 비용 부담이 큼");
+                    }
                 }
 
                 String summaryHighlight = summaryHighlight(candidate.getSummary());
-                if (!summaryHighlight.isBlank()) {
+                String quantifiedBenefit = summarizeCardQuantifiedBenefits(candidate);
+                if (!quantifiedBenefit.startsWith("정량 혜택 정보 없음")) {
+                    reasons.add("혜택 수치: " + quantifiedBenefit);
+                } else if (!summaryHighlight.isBlank()) {
                     reasons.add("핵심 혜택: " + summaryHighlight);
                 }
+
+                int finalScore = Math.max(0, score);
+                String reasonText = buildReasonWithScore(
+                    scoreParts,
+                    reasons,
+                    finalScore,
+                    "총점 동점 시 기관명/상품명 순"
+                );
+                ProductBenefitEstimate benefitEstimate = estimateProductBenefit(
+                    "CARD",
+                    finalScore,
+                    scoreParts,
+                    reasonText
+                );
+
+                String resolvedOfficialUrl = resolveOfficialUrlForProduct(
+                    candidate.getProductKey(),
+                    "CARD",
+                    candidate.getProviderName(),
+                    candidate.getProductName(),
+                    candidate.getOfficialUrl(),
+                    officialUrlOverrides
+                );
 
                 return new ScoredProduct(
                     "CARD",
@@ -383,13 +587,21 @@ public class RecommendationService {
                     candidate.getProviderName(),
                     candidate.getProductName(),
                     candidate.getSummary(),
-                    candidate.getAnnualFeeText(),
-                    Math.max(0, score),
-                    joinReasons(reasons),
-                    candidate.getOfficialUrl()
+                    normalizedAnnualFeeText,
+                    finalScore,
+                    reasonText,
+                    benefitEstimate.minExpectedMonthlyBenefit(),
+                    benefitEstimate.expectedMonthlyBenefit(),
+                    benefitEstimate.maxExpectedMonthlyBenefit(),
+                    benefitEstimate.estimateMethod(),
+                    benefitEstimate.benefitComponents(),
+                    resolvedOfficialUrl,
+                    buildCardDetailFields(candidate, resolvedOfficialUrl)
                 );
             })
-            .sorted(Comparator.comparingInt(ScoredProduct::score).reversed())
+            .sorted(Comparator.comparingInt(ScoredProduct::score).reversed()
+                .thenComparing(ScoredProduct::provider)
+                .thenComparing(ScoredProduct::name))
             .limit(3)
             .toList();
 
@@ -431,7 +643,14 @@ public class RecommendationService {
                 bundle.accountLabel(),
                 bundle.cardProductId(),
                 bundle.cardLabel(),
+                bundle.minExtraMonthlyBenefit(),
                 bundle.expectedExtraMonthlyBenefit(),
+                bundle.maxExtraMonthlyBenefit(),
+                bundle.accountExpectedExtraMonthlyBenefit(),
+                bundle.cardExpectedExtraMonthlyBenefit(),
+                bundle.synergyExtraMonthlyBenefit(),
+                bundle.estimateMethod(),
+                bundle.benefitComponents(),
                 bundle.reason()
             ))
             .toList();
@@ -451,11 +670,7 @@ public class RecommendationService {
 
         usedPairs.add(pairKey);
 
-        int synergyBonus = calculateSynergyBonus(account, card);
-        int expectedExtraMonthlyBenefit = Math.max(
-            6000,
-            ((account.score() + card.score()) * 42) + synergyBonus
-        );
+        BundleBenefitEstimate estimate = estimateBundleBenefit(account, card);
 
         bundles.add(new BundleCandidate(
             bundles.size() + 1,
@@ -464,33 +679,167 @@ public class RecommendationService {
             account.provider() + " · " + account.name(),
             card.productId(),
             card.provider() + " · " + card.name(),
-            expectedExtraMonthlyBenefit,
-            buildBundleReason(account, card, synergyBonus)
+            estimate.minExtraMonthlyBenefit(),
+            estimate.expectedExtraMonthlyBenefit(),
+            estimate.maxExtraMonthlyBenefit(),
+            estimate.accountExpectedExtraMonthlyBenefit(),
+            estimate.cardExpectedExtraMonthlyBenefit(),
+            estimate.synergyExtraMonthlyBenefit(),
+            estimate.estimateMethod(),
+            estimate.benefitComponents(),
+            buildBundleReason(account, card, estimate.totalSynergyBonus())
         ));
     }
 
-    private int calculateSynergyBonus(RecommendationItemResponse account, RecommendationItemResponse card) {
+    private BundleBenefitEstimate estimateBundleBenefit(
+        RecommendationItemResponse account,
+        RecommendationItemResponse card
+    ) {
+        int accountBaseFromScore = Math.max(0, account.score() * 42);
+        int cardBaseFromScore = Math.max(0, card.score() * 42);
+
+        List<RecommendationBundleBenefitComponentResponse> components =
+            buildBundleBenefitComponents(account, card, accountBaseFromScore, cardBaseFromScore);
+
+        int accountExpectedExtraMonthlyBenefit = sumAppliedBenefitByPrefix(components, "account_");
+        int cardExpectedExtraMonthlyBenefit = sumAppliedBenefitByPrefix(components, "card_");
+        int synergyExtraMonthlyBenefit = sumAppliedBenefitByPrefix(components, "synergy_");
+
+        int expectedExtraMonthlyBenefit = Math.max(
+            6000,
+            accountExpectedExtraMonthlyBenefit + cardExpectedExtraMonthlyBenefit + synergyExtraMonthlyBenefit
+        );
+
+        int baseTotal = accountBaseFromScore + cardBaseFromScore;
+        int variableBonus = components.stream()
+            .filter(RecommendationBundleBenefitComponentResponse::applied)
+            .filter(component -> !component.key().endsWith("_base_score"))
+            .mapToInt(RecommendationBundleBenefitComponentResponse::amountWonPerMonth)
+            .sum();
+
+        int minExtraMonthlyBenefit = Math.max(
+            6000,
+            baseTotal + (int) Math.round(variableBonus * 0.4d)
+        );
+        int maxExtraMonthlyBenefit = Math.max(
+            expectedExtraMonthlyBenefit,
+            Math.max(6000, baseTotal + (int) Math.round(variableBonus * 1.2d))
+        );
+
+        String estimateMethod = "룰 기반 추정치(계좌 이득 + 카드 이득 + 조합 보너스)";
+
+        return new BundleBenefitEstimate(
+            minExtraMonthlyBenefit,
+            expectedExtraMonthlyBenefit,
+            maxExtraMonthlyBenefit,
+            synergyExtraMonthlyBenefit,
+            accountExpectedExtraMonthlyBenefit,
+            cardExpectedExtraMonthlyBenefit,
+            synergyExtraMonthlyBenefit,
+            estimateMethod,
+            components
+        );
+    }
+
+    private List<RecommendationBundleBenefitComponentResponse> buildBundleBenefitComponents(
+        RecommendationItemResponse account,
+        RecommendationItemResponse card,
+        int accountBaseFromScore,
+        int cardBaseFromScore
+    ) {
         String accountText = normalize(account.summary() + " " + account.reason() + " " + account.meta());
         String cardText = normalize(card.summary() + " " + card.reason() + " " + card.meta());
 
-        int bonus = 0;
-        if (accountText.contains("급여")) {
-            bonus += 5200;
-        }
-        if (accountText.contains("저축") || accountText.contains("금리")) {
-            bonus += 3600;
-        }
-        if (cardText.contains("전월") || cardText.contains("실적")) {
-            bonus += 4200;
-        }
-        if (cardText.contains("카테고리") || cardText.contains("생활")) {
-            bonus += 3200;
-        }
-        if ((cardText.contains("여행") || cardText.contains("해외")) && accountText.contains("외화")) {
-            bonus += 2800;
-        }
+        List<RecommendationBundleBenefitComponentResponse> components = new ArrayList<>();
+        components.add(new RecommendationBundleBenefitComponentResponse(
+            "account_base_score",
+            "계좌 기본 절감액",
+            "계좌 추천 점수 환산",
+            accountBaseFromScore,
+            true
+        ));
+        components.add(new RecommendationBundleBenefitComponentResponse(
+            "card_base_score",
+            "카드 기본 절감액",
+            "카드 추천 점수 환산",
+            cardBaseFromScore,
+            true
+        ));
 
-        return bonus;
+        addBundleConditionComponent(
+            components,
+            "account_salary_transfer",
+            "계좌: 급여이체 우대 보너스",
+            "급여이체 및 우대조건 유지",
+            5200,
+            accountText.contains("급여")
+        );
+
+        addBundleConditionComponent(
+            components,
+            "account_savings_rate",
+            "계좌: 저축/금리 우대 보너스",
+            "저축·금리 우대조건 유지",
+            3600,
+            accountText.contains("저축") || accountText.contains("금리")
+        );
+
+        addBundleConditionComponent(
+            components,
+            "card_monthly_performance",
+            "카드: 전월실적 달성 보너스",
+            "카드 전월실적 충족",
+            4200,
+            cardText.contains("전월") || cardText.contains("실적")
+        );
+
+        addBundleConditionComponent(
+            components,
+            "card_category_spend",
+            "카드: 카테고리 소비 매칭 보너스",
+            "주요 소비 카테고리 사용 유지",
+            3200,
+            cardText.contains("카테고리") || cardText.contains("생활")
+        );
+
+        addBundleConditionComponent(
+            components,
+            "synergy_global_travel",
+            "조합: 여행/외화 연동 보너스",
+            "해외/외화 사용 조건 충족",
+            2800,
+            (cardText.contains("여행") || cardText.contains("해외")) && accountText.contains("외화")
+        );
+
+        return components;
+    }
+
+    private void addBundleConditionComponent(
+        List<RecommendationBundleBenefitComponentResponse> components,
+        String key,
+        String label,
+        String condition,
+        int amountWonPerMonth,
+        boolean applied
+    ) {
+        components.add(new RecommendationBundleBenefitComponentResponse(
+            key,
+            label,
+            condition,
+            amountWonPerMonth,
+            applied
+        ));
+    }
+
+    private int sumAppliedBenefitByPrefix(
+        List<RecommendationBundleBenefitComponentResponse> components,
+        String keyPrefix
+    ) {
+        return components.stream()
+            .filter(RecommendationBundleBenefitComponentResponse::applied)
+            .filter(component -> component.key().startsWith(keyPrefix))
+            .mapToInt(RecommendationBundleBenefitComponentResponse::amountWonPerMonth)
+            .sum();
     }
 
     private String buildBundleReason(
@@ -507,9 +856,13 @@ public class RecommendationService {
             reasons.add("우대조건 달성에 유리한 조합");
         }
 
-        reasons.add("추천 사유 결합: " + account.reason() + " + " + card.reason());
+        reasons.add("추천 사유 결합: "
+            + extractCoreReason(account.reason())
+            + " + "
+            + extractCoreReason(card.reason()));
         return joinReasons(reasons);
     }
+
 
     private Set<String> buildAccountIntentSignals(
         SimulateRecommendationRequest request,
@@ -532,6 +885,9 @@ public class RecommendationService {
             signals.add("savings");
         } else if ("starter".equals(priority)) {
             signals.add("starter");
+        } else if ("salary".equals(priority)) {
+            signals.add("salary");
+            signals.add("daily");
         } else if ("cashback".equals(priority)) {
             signals.add("daily");
         }
@@ -757,6 +1113,115 @@ public class RecommendationService {
         return compact.substring(0, 48) + "...";
     }
 
+    private String summarizeCardQuantifiedBenefits(CardCatalogEntity candidate) {
+        String summary = normalize(candidate.getSummary());
+        if (summary.isBlank()) {
+            return "정량 혜택 정보 없음 (공식 페이지에서 할인/적립 한도 확인)";
+        }
+
+        List<String> segments = splitTextSegments(candidate.getSummary());
+        Set<String> captures = new LinkedHashSet<>();
+
+        for (String segment : segments) {
+            if (!containsDigit(segment)) {
+                continue;
+            }
+
+            boolean hasBenefitKeyword = containsAnyKeyword(normalize(segment), CARD_BENEFIT_KEYWORDS);
+            if (hasBenefitKeyword) {
+                captures.add(compactSegment(segment));
+            }
+        }
+
+        Matcher percentMatcher = CARD_PERCENT_PATTERN.matcher(candidate.getSummary());
+        while (percentMatcher.find() && captures.size() < 5) {
+            captures.add(percentMatcher.group(1) + "%");
+        }
+
+        Matcher amountMatcher = CARD_AMOUNT_PATTERN.matcher(candidate.getSummary());
+        while (amountMatcher.find() && captures.size() < 5) {
+            captures.add(compactSegment(amountMatcher.group(1)));
+        }
+
+        if (captures.isEmpty()) {
+            return "정량 혜택 정보 없음 (공식 페이지에서 할인/적립 한도 확인)";
+        }
+
+        return captures.stream().limit(4).collect(Collectors.joining(" · "));
+    }
+
+    private String buildAnnualFeeEstimateText(String annualFeeText) {
+        AnnualFeeInfo annualFeeInfo = parseAnnualFee(annualFeeText);
+        if (annualFeeInfo.estimatedWon() == null) {
+            return "수치 확인 어려움";
+        }
+
+        if (annualFeeInfo.estimatedWon() == 0) {
+            return "0원 (면제/없음)";
+        }
+
+        return annualFeeInfo.estimatedWon() + "원 수준";
+    }
+
+    private String normalizeAnnualFeeText(String annualFeeText) {
+        String normalized = annualFeeText == null ? "" : annualFeeText.trim();
+        if (normalized.isBlank()) {
+            return "연회비 정보 없음";
+        }
+
+        String lower = normalize(normalized);
+        if ("없음".equals(lower)
+            || "면제".equals(lower)
+            || "무료".equals(lower)
+            || "0원".equals(lower)
+            || "무연회비".equals(lower)) {
+            return "연회비 없음";
+        }
+
+        return normalized;
+    }
+
+    private List<String> splitTextSegments(String text) {
+        String normalized = text == null ? "" : text.replace('\n', ' ');
+        String[] tokens = normalized.split("[·;,|]");
+        List<String> segments = new ArrayList<>();
+        for (String token : tokens) {
+            String compact = compactSegment(token);
+            if (!compact.isBlank()) {
+                segments.add(compact);
+            }
+        }
+        return segments;
+    }
+
+    private String compactSegment(String value) {
+        if (value == null) {
+            return "";
+        }
+        return value.replaceAll("\\s+", " ").trim();
+    }
+
+    private boolean containsDigit(String value) {
+        if (value == null) {
+            return false;
+        }
+        for (int i = 0; i < value.length(); i++) {
+            if (Character.isDigit(value.charAt(i))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean containsAnyKeyword(String text, Set<String> keywords) {
+        for (String keyword : keywords) {
+            if (text.contains(keyword)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private String labelsOf(Set<String> categories) {
         return categories.stream()
             .sorted()
@@ -778,7 +1243,13 @@ public class RecommendationService {
                 scored.meta,
                 scored.score,
                 scored.reason,
-                scored.officialUrl
+                scored.minExpectedMonthlyBenefit,
+                scored.expectedMonthlyBenefit,
+                scored.maxExpectedMonthlyBenefit,
+                scored.estimateMethod,
+                scored.benefitComponents,
+                scored.officialUrl,
+                scored.detailFields
             ));
         }
         return ranked;
@@ -794,19 +1265,29 @@ public class RecommendationService {
         return new RecommendationItemEntity(
             run,
             ranked.rank,
-            ranked.productType,
-            ranked.productId,
-            ranked.provider,
-            ranked.name,
+            limitLength(ranked.productType, 20),
+            limitLength(ranked.productId, 80),
+            limitLength(ranked.provider, 80),
+            limitLength(ranked.name, 120),
             ranked.summary,
-            ranked.meta,
+            limitLength(ranked.meta, 120),
             ranked.score,
-            ranked.reason,
+            limitLength(ranked.reason, 280),
             ranked.officialUrl
         );
     }
 
-    private RecommendationItemResponse toItemResponse(RecommendationItemEntity item) {
+    private RecommendationItemResponse toItemResponse(
+        RecommendationItemEntity item,
+        Map<String, String> officialUrlOverrides
+    ) {
+        ProductBenefitEstimate benefitEstimate = estimateProductBenefit(
+            item.getProductType(),
+            item.getScore(),
+            List.of(),
+            item.getReasonText()
+        );
+
         return new RecommendationItemResponse(
             item.getRank(),
             item.getProductType(),
@@ -816,7 +1297,13 @@ public class RecommendationService {
             item.getSummary(),
             item.getMeta(),
             item.getScore(),
-            item.getReasonText()
+            item.getReasonText(),
+            benefitEstimate.minExpectedMonthlyBenefit(),
+            benefitEstimate.expectedMonthlyBenefit(),
+            benefitEstimate.maxExpectedMonthlyBenefit(),
+            benefitEstimate.estimateMethod(),
+            benefitEstimate.benefitComponents(),
+            resolveDetailFields(item, officialUrlOverrides)
         );
     }
 
@@ -831,9 +1318,276 @@ public class RecommendationService {
                 item.summary,
                 item.meta,
                 item.score,
-                item.reason
+                item.reason,
+                item.minExpectedMonthlyBenefit,
+                item.expectedMonthlyBenefit,
+                item.maxExpectedMonthlyBenefit,
+                item.estimateMethod,
+                item.benefitComponents,
+                item.detailFields
             ))
             .toList();
+    }
+
+    private List<RecommendationDetailFieldResponse> resolveDetailFields(
+        RecommendationItemEntity item,
+        Map<String, String> officialUrlOverrides
+    ) {
+        if ("ACCOUNT".equals(item.getProductType())) {
+            return accountCatalogRepository.findByProductKey(item.getProductId())
+                .map(candidate -> buildAccountDetailFields(
+                    candidate,
+                    resolveOfficialUrlForProduct(
+                        candidate.getProductKey(),
+                        "ACCOUNT",
+                        candidate.getProviderName(),
+                        candidate.getProductName(),
+                        candidate.getOfficialUrl(),
+                        officialUrlOverrides
+                    )
+                ))
+                .orElseGet(() -> buildFallbackDetailFields(item, officialUrlOverrides));
+        }
+
+        if ("CARD".equals(item.getProductType())) {
+            return cardCatalogRepository.findByProductKey(item.getProductId())
+                .map(candidate -> buildCardDetailFields(
+                    candidate,
+                    resolveOfficialUrlForProduct(
+                        candidate.getProductKey(),
+                        "CARD",
+                        candidate.getProviderName(),
+                        candidate.getProductName(),
+                        candidate.getOfficialUrl(),
+                        officialUrlOverrides
+                    )
+                ))
+                .orElseGet(() -> buildFallbackDetailFields(item, officialUrlOverrides));
+        }
+
+        return buildFallbackDetailFields(item, officialUrlOverrides);
+    }
+
+    private List<RecommendationDetailFieldResponse> buildAccountDetailFields(
+        AccountCatalogEntity candidate,
+        String officialUrl
+    ) {
+        List<RecommendationDetailFieldResponse> fields = new ArrayList<>();
+        OfficialLinkPlan linkPlan = resolveOfficialLinkPlan(
+            "ACCOUNT",
+            candidate.getProviderName(),
+            candidate.getProductName(),
+            officialUrl
+        );
+
+        addDetailField(fields, "상품명", candidate.getProductName());
+        addDetailField(fields, "상품유형", candidate.getAccountKind() + " 계좌");
+        addDetailField(fields, "가입대상", inferAccountEligibility(candidate));
+        addDetailField(fields, "핵심 설명", candidate.getSummary());
+
+        Set<String> tagSignals = canonicalizeCategories(candidate.getTags());
+        if (!tagSignals.isEmpty()) {
+            addDetailField(fields, "핵심 태그", labelsOf(tagSignals));
+        }
+
+        appendOfficialLinkFields(fields, linkPlan);
+        return fields;
+    }
+
+    private List<RecommendationDetailFieldResponse> buildCardDetailFields(
+        CardCatalogEntity candidate,
+        String officialUrl
+    ) {
+        List<RecommendationDetailFieldResponse> fields = new ArrayList<>();
+        OfficialLinkPlan linkPlan = resolveOfficialLinkPlan(
+            "CARD",
+            candidate.getProviderName(),
+            candidate.getProductName(),
+            officialUrl
+        );
+
+        addDetailField(fields, "상품명", candidate.getProductName());
+        String normalizedAnnualFeeText = normalizeAnnualFeeText(candidate.getAnnualFeeText());
+        addDetailField(fields, "연회비", normalizedAnnualFeeText);
+        addDetailField(fields, "연회비(추정)", buildAnnualFeeEstimateText(normalizedAnnualFeeText));
+        addDetailField(fields, "가입대상", inferCardEligibility(candidate));
+        addDetailField(fields, "핵심 혜택", candidate.getSummary());
+        addDetailField(fields, "정량 혜택", summarizeCardQuantifiedBenefits(candidate));
+
+        Set<String> categories = deriveCardCategories(candidate);
+        if (!categories.isEmpty()) {
+            addDetailField(fields, "혜택 카테고리", labelsOf(categories));
+        }
+
+        Set<String> tagSignals = canonicalizeCategories(candidate.getTags());
+        if (!tagSignals.isEmpty()) {
+            addDetailField(fields, "핵심 태그", labelsOf(tagSignals));
+        }
+
+        appendOfficialLinkFields(fields, linkPlan);
+        return fields;
+    }
+
+    private List<RecommendationDetailFieldResponse> buildFallbackDetailFields(
+        RecommendationItemEntity item,
+        Map<String, String> officialUrlOverrides
+    ) {
+        List<RecommendationDetailFieldResponse> fields = new ArrayList<>();
+        String resolvedOfficialUrl = resolveOfficialUrlForProduct(
+            item.getProductId(),
+            item.getProductType(),
+            item.getProviderName(),
+            item.getProductName(),
+            item.getOfficialUrl(),
+            officialUrlOverrides
+        );
+        OfficialLinkPlan linkPlan = resolveOfficialLinkPlan(
+            item.getProductType(),
+            item.getProviderName(),
+            item.getProductName(),
+            resolvedOfficialUrl
+        );
+        addDetailField(fields, "상품명", item.getProductName());
+        addDetailField(fields, "요약", item.getSummary());
+        addDetailField(fields, "참고", item.getMeta());
+        appendOfficialLinkFields(fields, linkPlan);
+        return fields;
+    }
+
+    private void appendOfficialLinkFields(
+        List<RecommendationDetailFieldResponse> fields,
+        OfficialLinkPlan linkPlan
+    ) {
+        addDetailField(fields, "공식 설명서/상세", linkPlan.redirectUrl(), true);
+    }
+
+    private String resolveOfficialUrlForProduct(
+        String productKey,
+        String productType,
+        String providerName,
+        String productName,
+        String officialUrl,
+        Map<String, String> officialUrlOverrides
+    ) {
+        return productUrlOverrideService.resolveOfficialUrl(
+            productKey,
+            productType,
+            providerName,
+            productName,
+            officialUrl,
+            officialUrlOverrides
+        );
+    }
+
+    private OfficialLinkPlan resolveOfficialLinkPlan(
+        String productType,
+        String providerName,
+        String productName,
+        String officialUrl
+    ) {
+        String normalizedUrl = normalizeOfficialUrl(officialUrl);
+        if (normalizedUrl.isBlank()) {
+            return new OfficialLinkPlan("", "공식 링크 미제공", "", "");
+        }
+
+        if (!isLikelyGenericOfficialUrl(normalizedUrl)) {
+            return new OfficialLinkPlan(normalizedUrl, "공식 상품 상세 링크", normalizedUrl, "");
+        }
+
+        return new OfficialLinkPlan(normalizedUrl, "공식 홈페이지/목록 링크", normalizedUrl, "");
+    }
+
+    private boolean isLikelyGenericOfficialUrl(String rawUrl) {
+        try {
+            URI uri = new URI(rawUrl);
+            String host = normalize(uri.getHost());
+            String path = normalize(uri.getPath());
+            String query = normalize(uri.getQuery());
+
+            if (host.isBlank()) {
+                return true;
+            }
+
+            if (query.contains("prd") || query.contains("product") || query.contains("code=") || query.contains("id=")) {
+                return false;
+            }
+
+            if ("/".equals(path) || path.isBlank()) {
+                return true;
+            }
+
+            if (host.contains("epostbank.go.kr") && path.contains("cdcf")) {
+                return true;
+            }
+
+            if (host.contains("kdb.co.kr") && ("/".equals(path) || path.contains("/main"))) {
+                return true;
+            }
+
+            if (host.contains("fsc.go.kr") || host.contains("finlife.fss.or.kr")) {
+                return true;
+            }
+
+            int segmentCount = 0;
+            for (String segment : path.split("/")) {
+                if (!segment.isBlank()) {
+                    segmentCount++;
+                }
+            }
+            return segmentCount <= 1 && query.isBlank();
+        } catch (URISyntaxException exception) {
+            return true;
+        }
+    }
+
+
+    private String normalizeOfficialUrl(String value) {
+        if (value == null) {
+            return "";
+        }
+        String normalized = value.trim();
+        if (normalized.isBlank()) {
+            return "";
+        }
+        if (normalized.startsWith("http://") || normalized.startsWith("https://")) {
+            return normalized;
+        }
+        return "https://" + normalized;
+    }
+
+    private String inferAccountEligibility(AccountCatalogEntity candidate) {
+        String text = normalize(candidate.getProductName() + " " + candidate.getSummary() + " " + candidate.getAccountKind());
+        if (text.contains("청년") || text.contains("young")) {
+            return "청년/사회초년생 우대 가능";
+        }
+        if (text.contains("법인") || text.contains("기업")) {
+            return "개인·법인 구분형 (세부 조건은 공식 페이지 확인)";
+        }
+        return "개인 고객 중심 (세부 조건은 공식 페이지 확인)";
+    }
+
+    private String inferCardEligibility(CardCatalogEntity candidate) {
+        String text = normalize(candidate.getProductName() + " " + candidate.getSummary());
+        if (text.contains("법인")) {
+            return "개인/법인 구분형 (세부 조건은 공식 페이지 확인)";
+        }
+        if (text.contains("개인")) {
+            return "개인 고객";
+        }
+        return "개인 고객 중심 (발급 조건은 공식 페이지 확인)";
+    }
+
+    private void addDetailField(List<RecommendationDetailFieldResponse> fields, String label, String value) {
+        addDetailField(fields, label, value, false);
+    }
+
+    private void addDetailField(List<RecommendationDetailFieldResponse> fields, String label, String value, boolean link) {
+        String normalizedLabel = label == null ? "" : label.trim();
+        String normalizedValue = value == null ? "" : value.trim();
+        if (normalizedLabel.isBlank() || normalizedValue.isBlank()) {
+            return;
+        }
+        fields.add(new RecommendationDetailFieldResponse(normalizedLabel, normalizedValue, link));
     }
 
     private Set<String> lowerSet(Iterable<String> values) {
@@ -853,11 +1607,45 @@ public class RecommendationService {
         String normalized = normalize(value);
         return switch (normalized) {
             case "cashback", "캐시백", "할인", "생활" -> "cashback";
-            case "savings", "저축", "금리" -> "savings";
+            case "savings", "저축", "금리", "rate" -> "savings";
             case "travel", "여행", "해외" -> "travel";
             case "starter", "초보", "저비용" -> "starter";
+            case "salary", "급여", "주거래" -> "salary";
+            case "annualfee", "연회비", "fee" -> "annualfee";
             default -> normalized;
         };
+    }
+
+    private String resolveAccountPriority(SimulateRecommendationRequest request) {
+        String accountPriority = normalizePriority(request.accountPriority());
+        if (!accountPriority.isBlank()) {
+            if ("annualfee".equals(accountPriority)) {
+                return "starter";
+            }
+            return accountPriority;
+        }
+
+        String fallback = normalizePriority(request.priority());
+        if ("annualfee".equals(fallback)) {
+            return "starter";
+        }
+        return fallback;
+    }
+
+    private String resolveCardPriority(SimulateRecommendationRequest request) {
+        String cardPriority = normalizePriority(request.cardPriority());
+        if (!cardPriority.isBlank()) {
+            if ("salary".equals(cardPriority)) {
+                return "cashback";
+            }
+            return cardPriority;
+        }
+
+        String fallback = normalizePriority(request.priority());
+        if ("salary".equals(fallback)) {
+            return "cashback";
+        }
+        return fallback;
     }
 
     private String normalizeCategoryToken(String value) {
@@ -873,9 +1661,30 @@ public class RecommendationService {
         return value == null ? "" : value.trim().toLowerCase(Locale.ROOT);
     }
 
+    private String limitLength(String value, int maxLength) {
+        if (value == null) {
+            return "";
+        }
+
+        String trimmed = value.trim();
+        if (trimmed.length() <= maxLength) {
+            return trimmed;
+        }
+
+        if (maxLength <= 3) {
+            return trimmed.substring(0, maxLength);
+        }
+
+        return trimmed.substring(0, maxLength - 3) + "...";
+    }
+
     private String joinReasons(List<String> reasons) {
+        return joinReasons(reasons, 4, " · ");
+    }
+
+    private String joinReasons(List<String> reasons, int limit, String delimiter) {
         if (reasons.isEmpty()) {
-            return "기본 조건 기반 추천";
+            return "";
         }
 
         List<String> deduplicated = new ArrayList<>();
@@ -885,13 +1694,162 @@ public class RecommendationService {
             if (!normalized.isBlank() && seen.add(normalized)) {
                 deduplicated.add(reason);
             }
-            if (deduplicated.size() >= 4) {
+            if (deduplicated.size() >= Math.max(limit, 1)) {
                 break;
             }
         }
 
-        return String.join(" · ", deduplicated);
+        return String.join(delimiter, deduplicated);
     }
+
+    private void addScorePart(List<ScoreReasonPart> scoreParts, String label, int points) {
+        if (points == 0) {
+            return;
+        }
+        scoreParts.add(new ScoreReasonPart(label, points));
+    }
+
+    private String buildReasonWithScore(
+        List<ScoreReasonPart> scoreParts,
+        List<String> coreReasons,
+        int totalScore,
+        String tieBreakRule
+    ) {
+        String scoreLine = scoreParts.stream()
+            .map(part -> part.label() + "(" + formatSignedPoints(part.points()) + "점)")
+            .collect(Collectors.joining(", "));
+        if (scoreLine.isBlank()) {
+            scoreLine = "기본점수(" + totalScore + "점)";
+        }
+
+        List<String> lines = new ArrayList<>();
+        lines.add("점수구성: " + scoreLine + " = " + totalScore + "점");
+
+        String coreReasonLine = joinReasons(coreReasons, 6, " · ");
+        if (!coreReasonLine.isBlank()) {
+            lines.add("핵심근거: " + coreReasonLine);
+        }
+
+        if (!normalize(tieBreakRule).isBlank()) {
+            lines.add("동점처리: " + tieBreakRule);
+        }
+
+        return String.join("\n", lines);
+    }
+
+    private String formatSignedPoints(int points) {
+        return points >= 0 ? "+" + points : String.valueOf(points);
+    }
+
+    private String extractCoreReason(String reasonText) {
+        if (reasonText == null || reasonText.isBlank()) {
+            return "기본 조건 기반 추천";
+        }
+
+        for (String line : reasonText.split("\\R")) {
+            String trimmed = line.trim();
+            if (trimmed.startsWith("핵심근거:")) {
+                String extracted = trimmed.substring("핵심근거:".length()).trim();
+                if (!extracted.isBlank()) {
+                    return extracted;
+                }
+            }
+        }
+
+        return reasonText.replaceAll("\\s+", " ").trim();
+    }
+
+
+    private ProductBenefitEstimate estimateProductBenefit(
+        String productType,
+        int totalScore,
+        List<ScoreReasonPart> scoreParts,
+        String reasonText
+    ) {
+        int pointUnitWon = "ACCOUNT".equals(productType) ? 130 : 120;
+        List<ScoreReasonPart> resolvedParts = scoreParts == null || scoreParts.isEmpty()
+            ? parseScorePartsFromReason(reasonText, totalScore)
+            : scoreParts;
+
+        List<RecommendationBundleBenefitComponentResponse> components = new ArrayList<>();
+        for (int index = 0; index < resolvedParts.size(); index++) {
+            ScoreReasonPart part = resolvedParts.get(index);
+            int amount = part.points() * pointUnitWon;
+            String key = productType.toLowerCase(Locale.ROOT) + "_score_" + index;
+            String labelPrefix = "ACCOUNT".equals(productType) ? "계좌" : "카드";
+            String partLabel = part.label() == null ? "" : part.label().trim();
+            String label = "기본점수".equals(partLabel)
+                ? labelPrefix + " 기본 절감액"
+                : labelPrefix + ": " + partLabel;
+            String condition = part.points() >= 0 ? "조건 충족 시 반영" : "비용/패널티 반영";
+            components.add(new RecommendationBundleBenefitComponentResponse(
+                key,
+                label,
+                condition,
+                amount,
+                true
+            ));
+        }
+
+        int expected = components.stream()
+            .mapToInt(RecommendationBundleBenefitComponentResponse::amountWonPerMonth)
+            .sum();
+        expected = Math.max(0, expected);
+
+        int min = Math.max(0, (int) Math.round(expected * 0.72d));
+        int max = Math.max(expected, (int) Math.round(expected * 1.18d));
+
+        String estimateMethod = "점수 환산 기반 추정 (1점당 " + pointUnitWon + "원, 항목별 가감점 합산)";
+
+        return new ProductBenefitEstimate(min, expected, max, estimateMethod, components);
+    }
+
+    private List<ScoreReasonPart> parseScorePartsFromReason(String reasonText, int fallbackScore) {
+        if (reasonText == null || reasonText.isBlank()) {
+            return List.of(new ScoreReasonPart("기본점수", fallbackScore));
+        }
+
+        String scoreLine = null;
+        for (String rawLine : reasonText.split("\\R")) {
+            String line = rawLine.trim();
+            if (line.startsWith("점수구성:")) {
+                scoreLine = line.substring("점수구성:".length()).trim();
+                break;
+            }
+        }
+
+        if (scoreLine == null || scoreLine.isBlank()) {
+            return List.of(new ScoreReasonPart("기본점수", fallbackScore));
+        }
+
+        scoreLine = scoreLine.replaceAll("\\s*=\\s*[-+]?\\d+\\s*점\\s*$", "").trim();
+        if (scoreLine.isBlank()) {
+            return List.of(new ScoreReasonPart("기본점수", fallbackScore));
+        }
+
+        List<ScoreReasonPart> parts = new ArrayList<>();
+        for (String token : scoreLine.split(",")) {
+            String item = token.trim();
+            Matcher matcher = Pattern.compile("(.+)\\(([+-]?\\d+)점\\)$").matcher(item);
+            if (matcher.find()) {
+                String label = matcher.group(1).trim();
+                int points;
+                try {
+                    points = Integer.parseInt(matcher.group(2));
+                } catch (NumberFormatException exception) {
+                    continue;
+                }
+                parts.add(new ScoreReasonPart(label, points));
+            }
+        }
+
+        if (parts.isEmpty()) {
+            parts.add(new ScoreReasonPart("기본점수", fallbackScore));
+        }
+
+        return parts;
+    }
+
 
     private static Map<String, String> buildCategoryAliases() {
         Map<String, String> aliases = new HashMap<>();
@@ -970,7 +1928,13 @@ public class RecommendationService {
         String meta,
         int score,
         String reason,
-        String officialUrl
+        int minExpectedMonthlyBenefit,
+        int expectedMonthlyBenefit,
+        int maxExpectedMonthlyBenefit,
+        String estimateMethod,
+        List<RecommendationBundleBenefitComponentResponse> benefitComponents,
+        String officialUrl,
+        List<RecommendationDetailFieldResponse> detailFields
     ) {
     }
 
@@ -984,7 +1948,13 @@ public class RecommendationService {
         String meta,
         int score,
         String reason,
-        String officialUrl
+        int minExpectedMonthlyBenefit,
+        int expectedMonthlyBenefit,
+        int maxExpectedMonthlyBenefit,
+        String estimateMethod,
+        List<RecommendationBundleBenefitComponentResponse> benefitComponents,
+        String officialUrl,
+        List<RecommendationDetailFieldResponse> detailFields
     ) {
     }
 
@@ -995,9 +1965,41 @@ public class RecommendationService {
         String accountLabel,
         String cardProductId,
         String cardLabel,
+        int minExtraMonthlyBenefit,
         int expectedExtraMonthlyBenefit,
+        int maxExtraMonthlyBenefit,
+        int accountExpectedExtraMonthlyBenefit,
+        int cardExpectedExtraMonthlyBenefit,
+        int synergyExtraMonthlyBenefit,
+        String estimateMethod,
+        List<RecommendationBundleBenefitComponentResponse> benefitComponents,
         String reason
     ) {
+    }
+
+    private record BundleBenefitEstimate(
+        int minExtraMonthlyBenefit,
+        int expectedExtraMonthlyBenefit,
+        int maxExtraMonthlyBenefit,
+        int totalSynergyBonus,
+        int accountExpectedExtraMonthlyBenefit,
+        int cardExpectedExtraMonthlyBenefit,
+        int synergyExtraMonthlyBenefit,
+        String estimateMethod,
+        List<RecommendationBundleBenefitComponentResponse> benefitComponents
+    ) {
+    }
+
+    private record ProductBenefitEstimate(
+        int minExpectedMonthlyBenefit,
+        int expectedMonthlyBenefit,
+        int maxExpectedMonthlyBenefit,
+        String estimateMethod,
+        List<RecommendationBundleBenefitComponentResponse> benefitComponents
+    ) {
+    }
+
+    private record ScoreReasonPart(String label, int points) {
     }
 
     private record CategoryKeywordRule(String category, Set<String> keywords) {
@@ -1014,5 +2016,13 @@ public class RecommendationService {
     }
 
     private record AnnualFeeInfo(boolean lowFee, Integer estimatedWon) {
+    }
+
+    private record OfficialLinkPlan(
+        String redirectUrl,
+        String linkTypeLabel,
+        String originalUrl,
+        String searchUrl
+    ) {
     }
 }

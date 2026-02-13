@@ -26,6 +26,7 @@ cp config/secrets.example.properties config/secrets.properties
 
 주의:
 - `config/secrets.properties`는 `.gitignore`로 제외되어 Git에 올라가지 않습니다.
+- `config/product-url-overrides.properties`도 `.gitignore`로 제외되어 로컬 URL 매핑을 안전하게 관리할 수 있습니다.
 - IntelliJ Run Configuration 환경변수를 계속 써도 되지만, 배포/운영은 Secret Manager 또는 서버 환경변수로 관리하는 것을 권장합니다.
 
 ## 필수 환경 변수
@@ -92,6 +93,9 @@ CARD_PUBLIC_ALL_SERVICE_KEY=발급받은키
 CARD_PUBLIC_ALL_INCLUDE_KDB=true
 CARD_PUBLIC_ALL_INCLUDE_KRPOST=true
 CARD_PUBLIC_ALL_INCLUDE_FINANCE_STATS=true
+CARD_PUBLIC_ALL_KDB_MAX_PAGES=20
+CARD_PUBLIC_ALL_KRPOST_MAX_PAGES=20
+CARD_PUBLIC_ALL_FIN_STATS_MAX_PAGES=20
 ```
 
 기본 내장 소스:
@@ -102,6 +106,44 @@ CARD_PUBLIC_ALL_INCLUDE_FINANCE_STATS=true
 참고:
 - 금융위 통계 데이터는 카드 카탈로그에는 저장되지만 `stat-only` 태그로 저장되며 추천 랭킹 계산에서는 제외됩니다.
 - XML 응답 API도 자동 파싱(JSON/XML)을 지원합니다.
+
+## 상품 상세 URL 오버라이드
+
+추천 클릭 시 회사 메인 페이지 대신 상품 전용 상세 페이지로 보내고 싶다면
+`config/product-url-overrides.properties`에 오버라이드를 추가하세요.
+
+지원 키 형식:
+- `productKey=url`
+- `PRODUCT_TYPE|providerName|productName=url` (`PRODUCT_TYPE`: `ACCOUNT`/`CARD`)
+
+예시:
+
+```properties
+# exact productKey
+finlife:saving:0010001:wr0001f=https://spot.wooribank.com/pot/Dream?...
+
+# top recommendation deep-link guarantee
+ACCOUNT|우리은행|우리SUPER주거래적금=https://spot.wooribank.com/pot/Dream?...
+CARD|KB국민카드|온라인 맥스=https://card.kbcard.com/CXPRICAC0076.cms
+```
+
+매칭 우선순위:
+1. `productKey`
+2. `PRODUCT_TYPE|provider|product`
+3. `provider|product`
+4. `PRODUCT_TYPE|product`
+
+적용 방식:
+- 추천/리다이렉트 시점에 파일을 즉시 읽어 반영됩니다.
+- 카탈로그 DB에도 반영하려면 재동기화(`finlife`, `cards/external`)를 추가로 실행하세요.
+- 공식 URL은 오버라이드 파일 기준으로 즉시 반영됩니다.
+- 상품별 딥링크가 없는 경우에는 기관 메인/목록 URL로 이동할 수 있으므로, 상위 추천 상품은 오버라이드 등록을 권장합니다.
+
+경로 변경이 필요하면 환경변수로 지정할 수 있습니다:
+
+```env
+CATALOG_PRODUCT_URL_OVERRIDES_PATH=./config/product-url-overrides.properties
+```
 
 ## 동기화 확인
 
@@ -161,3 +203,33 @@ CATALOG_SYNC_ZONE=Asia/Seoul
 - 추천 사유 문구에 실제 데이터 필드 반영
   - 계좌: 요약의 금리(최고/기본), 계좌종류, 우대 신호
   - 카드: 연회비 텍스트, 카테고리 일치, 혜택 요약 하이라이트
+
+## 동기화 상태 API
+
+운영 점검용으로 마지막 동기화 성공/실패 상태를 조회할 수 있습니다.
+
+- `GET /api/catalog/sync/status`
+  - 대상별(`FINLIFE`, `CARDS`) 마지막 실행 시각
+  - 마지막 성공 시각 / 실패 시각
+  - 마지막 처리 건수(`fetched`, `upserted`, `deactivated`, `skipped`)
+  - 마지막 실패 사유(`lastMessage`)와 연속 실패 횟수
+
+예시:
+
+```bash
+curl -s http://localhost:8080/api/catalog/sync/status
+```
+
+## 추천 품질 측정 루프
+
+클릭/전환 로그를 기반으로 카테고리별 CTR/CVR를 주기적으로 집계하고,
+가중치 조정 근거(추천/클릭/전환 수치 + 제안 액션)를 스냅샷으로 저장합니다.
+
+- 자동 실행: `recommendation.quality.*` 설정
+- 수동 실행: `POST /api/recommendations/quality/recompute`
+- 최신 조회: `GET /api/recommendations/quality/latest`
+
+제안 액션 규칙:
+- `UP`: CTR/CVR가 높은 카테고리 (가중치 상향 제안)
+- `DOWN`: CTR/CVR가 낮은 카테고리 (가중치 하향 제안)
+- `HOLD`: 표본 부족 또는 중립 구간

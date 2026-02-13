@@ -3,7 +3,9 @@ package com.benepick.recommendation.service;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.io.IOException;
+import java.io.StringReader;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.net.URLEncoder;
@@ -24,12 +26,23 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import javax.xml.parsers.DocumentBuilder;
+import javax.xml.parsers.DocumentBuilderFactory;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
 import org.springframework.web.server.ResponseStatusException;
+import org.w3c.dom.Document;
+import org.w3c.dom.Element;
+import org.w3c.dom.Node;
+import org.w3c.dom.NodeList;
+import org.xml.sax.InputSource;
 
 @Component
 public class CardExternalApiClient {
+
+    private static final Logger log = LoggerFactory.getLogger(CardExternalApiClient.class);
 
     private static final DateTimeFormatter YEAR_MONTH_FORMATTER = DateTimeFormatter.ofPattern("yyyyMM");
 
@@ -37,6 +50,7 @@ public class CardExternalApiClient {
     private final ObjectMapper objectMapper;
     private final ObjectMapper xmlMapper;
     private final HttpClient httpClient;
+    private final Set<String> fallbackItemsPathWarned = new HashSet<>();
 
     public CardExternalApiClient(CardExternalProperties properties, ObjectMapper objectMapper) {
         this.properties = properties;
@@ -149,20 +163,62 @@ public class CardExternalApiClient {
         }
 
         List<ExternalCardProduct> merged = new ArrayList<>();
+        Map<String, String> sourceErrors = new LinkedHashMap<>();
 
         if (all.isIncludeKdb()) {
-            merged.addAll(fetchKdbCards(all.getKdb(), serviceKey));
+            try {
+                List<ExternalCardProduct> kdb = fetchKdbCards(all.getKdb(), serviceKey);
+                if (kdb.isEmpty()) {
+                    sourceErrors.put("kdb", "empty result");
+                }
+                merged.addAll(kdb);
+            } catch (Exception exception) {
+                sourceErrors.put("kdb", exception.getMessage());
+                log.warn("KDB card source sync skipped: {}", exception.getMessage());
+            }
+        } else {
+            sourceErrors.put("kdb", "disabled by config");
         }
 
         if (all.isIncludeKrpost()) {
-            merged.addAll(fetchKrpostCards(all.getKrpost(), serviceKey));
+            try {
+                List<ExternalCardProduct> krpost = fetchKrpostCards(all.getKrpost(), serviceKey);
+                if (krpost.isEmpty()) {
+                    sourceErrors.put("krpost", "empty result");
+                }
+                merged.addAll(krpost);
+            } catch (Exception exception) {
+                sourceErrors.put("krpost", exception.getMessage());
+                log.warn("KRPOST card source sync skipped: {}", exception.getMessage());
+            }
+        } else {
+            sourceErrors.put("krpost", "disabled by config");
         }
 
         if (all.isIncludeFinanceStats()) {
-            merged.addAll(fetchFinanceStatsCards(all.getFinanceStats(), serviceKey));
+            try {
+                List<ExternalCardProduct> finStats = fetchFinanceStatsCards(all.getFinanceStats(), serviceKey);
+                if (finStats.isEmpty()) {
+                    sourceErrors.put("finance-stats", "empty result");
+                }
+                merged.addAll(finStats);
+            } catch (Exception exception) {
+                sourceErrors.put("finance-stats", exception.getMessage());
+                log.warn("Finance stats card source sync skipped: {}", exception.getMessage());
+            }
+        } else {
+            sourceErrors.put("finance-stats", "disabled by config");
         }
 
-        return deduplicateProducts(merged);
+        List<ExternalCardProduct> deduplicated = deduplicateProducts(merged);
+        if (deduplicated.isEmpty()) {
+            throw new ResponseStatusException(
+                HttpStatus.BAD_GATEWAY,
+                "All public card sources returned empty result: " + sourceErrors
+            );
+        }
+
+        return deduplicated;
     }
 
     private List<ExternalCardProduct> fetchKdbCards(CardExternalProperties.Kdb config, String serviceKey) {
@@ -182,11 +238,12 @@ public class CardExternalApiClient {
             query.put("resultType", "json");
         }
 
-        JsonNode rows = fetchPublicDataRows(
+        JsonNode rows = fetchPublicDataRowsPaged(
             config.getUrl(),
             query,
             config.getItemsPath(),
-            "KDB card product source"
+            "KDB card product source",
+            config.getMaxPages()
         );
 
         return mapRowsToProducts(
@@ -211,11 +268,12 @@ public class CardExternalApiClient {
         query.put("pageNo", config.getPageNo());
         query.put("numOfRows", config.getNumOfRows());
 
-        JsonNode rows = fetchPublicDataRows(
+        JsonNode rows = fetchPublicDataRowsPaged(
             config.getUrl(),
             query,
             config.getItemsPath(),
-            "KRPOST card product source"
+            "KRPOST card product source",
+            config.getMaxPages()
         );
 
         return mapRowsToProducts(
@@ -244,14 +302,15 @@ public class CardExternalApiClient {
         query.put("numOfRows", config.getNumOfRows());
         query.put("pageNo", config.getPageNo());
         query.put("resultType", firstNonBlank(config.getResultType(), "json"));
-        query.put("title", firstNonBlank(config.getTitle(), "신용카드사 일반현황"));
+        query.put("title", firstNonBlank(config.getTitle(), "신용카드_일반현황_임직원현황"));
         query.put("basYm", basYm);
 
-        JsonNode rows = fetchPublicDataRows(
+        JsonNode rows = fetchPublicDataRowsPaged(
             config.getUrl(),
             query,
             config.getItemsPath(),
-            "Finance committee card stats source"
+            "Finance committee card stats source",
+            config.getMaxPages()
         );
 
         return mapRowsToProducts(
@@ -276,6 +335,96 @@ public class CardExternalApiClient {
         JsonNode root = parseStructuredBody(body, sourceLabel);
         validatePublicDataResponse(root, sourceLabel);
         return resolvePublicDataRows(root, itemsPath);
+    }
+
+    private JsonNode fetchPublicDataRowsPaged(
+        String url,
+        Map<String, String> query,
+        String itemsPath,
+        String sourceLabel,
+        int maxPages
+    ) {
+        int startPage = parsePositiveInt(query.get("pageNo"), 1);
+        int numOfRows = parsePositiveInt(query.get("numOfRows"), 100);
+        int pageLimit = Math.max(maxPages, 1);
+
+        ArrayNode mergedRows = objectMapper.createArrayNode();
+
+        for (int offset = 0; offset < pageLimit; offset++) {
+            int currentPage = startPage + offset;
+            Map<String, String> pagedQuery = new LinkedHashMap<>(query);
+            pagedQuery.put("pageNo", String.valueOf(currentPage));
+
+            URI uri = buildUri(url, pagedQuery);
+            String body = fetchRemote(uri);
+            JsonNode root = parseStructuredBody(body, sourceLabel);
+            validatePublicDataResponse(root, sourceLabel);
+
+            JsonNode rows = resolvePublicDataRows(root, itemsPath);
+            appendRows(mergedRows, rows);
+
+            int fetchedCount = rows.isArray() ? rows.size() : 0;
+            int totalCount = extractTotalCount(root);
+
+            if (fetchedCount <= 0) {
+                break;
+            }
+
+            if (fetchedCount < numOfRows) {
+                break;
+            }
+
+            if (totalCount > 0 && mergedRows.size() >= totalCount) {
+                break;
+            }
+
+            if (totalCount > 0 && ((long) currentPage * numOfRows) >= totalCount) {
+                break;
+            }
+        }
+
+        return mergedRows;
+    }
+
+    private int extractTotalCount(JsonNode root) {
+        String raw = firstNonBlank(
+            text(root.path("response").path("body").path("items"), "totalCount"),
+            text(root.path("response").path("body"), "totalCount"),
+            text(root.path("body"), "totalCount"),
+            text(root, "totalCount")
+        );
+        return parsePositiveInt(raw, -1);
+    }
+
+    private int parsePositiveInt(String value, int fallback) {
+        String normalized = safe(value);
+        if (normalized.isBlank()) {
+            return fallback;
+        }
+
+        try {
+            int parsed = Integer.parseInt(normalized);
+            return parsed > 0 ? parsed : fallback;
+        } catch (NumberFormatException ignored) {
+            return fallback;
+        }
+    }
+
+    private void appendRows(ArrayNode target, JsonNode rows) {
+        if (rows == null || rows.isMissingNode() || rows.isNull()) {
+            return;
+        }
+
+        if (rows.isArray()) {
+            for (JsonNode row : rows) {
+                target.add(row);
+            }
+            return;
+        }
+
+        if (rows.isObject()) {
+            target.add(rows);
+        }
     }
 
     private List<ExternalCardProduct> mapRowsToProducts(
@@ -347,16 +496,7 @@ public class CardExternalApiClient {
                 "연회비 정보 없음"
             );
 
-            String summary = firstNonBlank(
-                text(row, "summary"),
-                text(row, "description"),
-                text(row, "benefitSummary"),
-                text(row, "bnftSmry"),
-                text(row, "cardDesc"),
-                text(row, "prdtFeature"),
-                text(row, "prdOtl"),
-                defaultSummary
-            );
+            String summary = buildSummaryFromRow(row, defaultSummary);
 
             String officialUrl = firstNonBlank(
                 text(row, "officialUrl"),
@@ -410,6 +550,41 @@ public class CardExternalApiClient {
         }
 
         return new ArrayList<>(deduplicated.values());
+    }
+
+    private String buildSummaryFromRow(JsonNode row, String defaultSummary) {
+        String explicit = firstNonBlank(
+            text(row, "summary"),
+            text(row, "description"),
+            text(row, "benefitSummary"),
+            text(row, "bnftSmry"),
+            text(row, "cardDesc"),
+            text(row, "prdtFeature"),
+            text(row, "prdOtl")
+        );
+        if (!explicit.isBlank()) {
+            return explicit;
+        }
+
+        List<String> parts = new ArrayList<>();
+        addSummaryPart(parts, "가입대상", firstNonBlank(text(row, "PPSN_CORP_DVSN_NM_S10"), text(row, "jinTgtCone")));
+        addSummaryPart(parts, "발급가능", text(row, "CARD_ISSU_PSBL_YN_S10"));
+        addSummaryPart(parts, "교통카드", firstNonBlank(text(row, "TRFC_CARD_DVSN_NM_S20"), text(row, "cadTpTcNm")));
+        addSummaryPart(parts, "해외이용", firstNonBlank(text(row, "FORN_USE_PSBL_YN_S30"), text(row, "frnUseYn")));
+        addSummaryPart(parts, "상품개요", firstNonBlank(text(row, "prdOtl"), text(row, "benefit"), text(row, "prdtFeature")));
+
+        if (!parts.isEmpty()) {
+            return String.join(" · ", parts);
+        }
+
+        return defaultSummary;
+    }
+
+    private void addSummaryPart(List<String> parts, String label, String value) {
+        String normalized = safe(value);
+        if (!normalized.isBlank()) {
+            parts.add(label + ": " + normalized);
+        }
     }
 
     private URI buildUri(String baseUrl, Map<String, String> query) {
@@ -554,26 +729,87 @@ public class CardExternalApiClient {
         try {
             return objectMapper.readTree(body);
         } catch (IOException jsonException) {
-            if (xmlMapper == null) {
-                throw new ResponseStatusException(
-                    HttpStatus.BAD_GATEWAY,
-                    "Failed to parse " + sourceLabel + " response as JSON. XML parser is unavailable in runtime classpath",
-                    jsonException
-                );
+            if (xmlMapper != null) {
+                try {
+                    return xmlMapper.readTree(body);
+                } catch (IOException ignored) {
+                    // Fall through to JDK XML parsing fallback.
+                }
             }
 
-            try {
-                return xmlMapper.readTree(body);
-            } catch (IOException xmlException) {
-                throw new ResponseStatusException(
-                    HttpStatus.BAD_GATEWAY,
-                    "Failed to parse " + sourceLabel + " response as JSON/XML",
-                    xmlException
-                );
+            JsonNode fallback = parseXmlWithJdk(body);
+            if (fallback != null) {
+                return fallback;
             }
+
+            throw new ResponseStatusException(
+                HttpStatus.BAD_GATEWAY,
+                "Failed to parse " + sourceLabel + " response as JSON/XML",
+                jsonException
+            );
         }
     }
 
+    private JsonNode parseXmlWithJdk(String body) {
+        try {
+            DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
+            factory.setNamespaceAware(false);
+            try {
+                factory.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true);
+                factory.setFeature("http://xml.org/sax/features/external-general-entities", false);
+                factory.setFeature("http://xml.org/sax/features/external-parameter-entities", false);
+            } catch (Exception ignored) {
+                // Optional hardening may not be supported by all XML parser implementations.
+            }
+
+            DocumentBuilder builder = factory.newDocumentBuilder();
+            Document document = builder.parse(new InputSource(new StringReader(body)));
+            Element root = document.getDocumentElement();
+            if (root == null) {
+                return null;
+            }
+
+            ObjectNode wrapper = objectMapper.createObjectNode();
+            wrapper.set(root.getNodeName(), xmlElementToJson(root));
+            return wrapper;
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    private JsonNode xmlElementToJson(Element element) {
+        NodeList children = element.getChildNodes();
+        boolean hasElementChild = false;
+        ObjectNode objectNode = objectMapper.createObjectNode();
+
+        for (int index = 0; index < children.getLength(); index++) {
+            Node node = children.item(index);
+            if (node.getNodeType() != Node.ELEMENT_NODE) {
+                continue;
+            }
+
+            hasElementChild = true;
+            String fieldName = node.getNodeName();
+            JsonNode childJson = xmlElementToJson((Element) node);
+            JsonNode existing = objectNode.get(fieldName);
+            if (existing == null) {
+                objectNode.set(fieldName, childJson);
+            } else if (existing.isArray()) {
+                ((ArrayNode) existing).add(childJson);
+            } else {
+                ArrayNode arrayNode = objectMapper.createArrayNode();
+                arrayNode.add(existing);
+                arrayNode.add(childJson);
+                objectNode.set(fieldName, arrayNode);
+            }
+        }
+
+        if (!hasElementChild) {
+            return objectMapper.getNodeFactory().textNode(safe(element.getTextContent()));
+        }
+
+        return objectNode;
+    }
     private void validatePublicDataResponse(JsonNode root, String sourceLabel) {
         String resultCode = firstNonBlank(
             text(root.path("response").path("header"), "resultCode"),
@@ -585,7 +821,11 @@ public class CardExternalApiClient {
             return;
         }
 
-        if ("00".equals(resultCode) || "000".equals(resultCode)) {
+        String normalizedCode = resultCode.trim();
+        if ("0".equals(normalizedCode)
+            || "00".equals(normalizedCode)
+            || "000".equals(normalizedCode)
+            || "NORMAL_CODE".equalsIgnoreCase(normalizedCode)) {
             return;
         }
 
@@ -648,15 +888,18 @@ public class CardExternalApiClient {
                 return normalized;
             }
 
-            throw new ResponseStatusException(
-                HttpStatus.BAD_GATEWAY,
-                "Configured itemsPath does not point to an array/object rows node"
-            );
+            // Fallback to built-in candidates when configured path mismatches
+            if (fallbackItemsPathWarned.add(itemsPath)) {
+                log.warn("Configured itemsPath {} not matched. Falling back to default path candidates", itemsPath);
+            }
         }
 
         List<JsonNode> candidates = List.of(
             root.path("response").path("body").path("items").path("item"),
             root.path("response").path("body").path("items"),
+            root.path("response").path("body").path("tableList").path(0).path("items").path("item"),
+            root.path("response").path("body").path("tableList").path(0).path("items"),
+            root.path("response").path("body").path("tableList").path("items").path("item"),
             root.path("body").path("items").path("item"),
             root.path("body").path("items"),
             root.path("items").path("item"),
@@ -686,9 +929,74 @@ public class CardExternalApiClient {
             if (field.isBlank()) {
                 continue;
             }
-            current = current.path(field);
+            current = applyPathToken(current, field);
         }
         return current;
+    }
+
+    private JsonNode applyPathToken(JsonNode current, String token) {
+        if (current == null || current.isMissingNode() || current.isNull()) {
+            return current;
+        }
+
+        String remaining = safe(token);
+        while (!remaining.isBlank()) {
+            int openBracket = remaining.indexOf('[');
+            if (openBracket < 0) {
+                return pathByFieldOrIndex(current, remaining);
+            }
+
+            String fieldPart = remaining.substring(0, openBracket).trim();
+            if (!fieldPart.isBlank()) {
+                current = pathByFieldOrIndex(current, fieldPart);
+            }
+
+            int closeBracket = remaining.indexOf(']', openBracket);
+            if (closeBracket < 0) {
+                return pathByFieldOrIndex(current, remaining);
+            }
+
+            String indexPart = remaining.substring(openBracket + 1, closeBracket).trim();
+            current = pathByFieldOrIndex(current, indexPart);
+            remaining = remaining.substring(closeBracket + 1).trim();
+        }
+
+        return current;
+    }
+
+    private JsonNode pathByFieldOrIndex(JsonNode current, String segment) {
+        if (current == null || current.isMissingNode() || current.isNull()) {
+            return current;
+        }
+
+        String normalized = safe(segment);
+        if (normalized.isBlank()) {
+            return current;
+        }
+
+        if (isNumeric(normalized)) {
+            try {
+                return current.path(Integer.parseInt(normalized));
+            } catch (NumberFormatException ignored) {
+                // no-op
+            }
+        }
+
+        return current.path(normalized);
+    }
+
+    private boolean isNumeric(String value) {
+        if (value == null || value.isBlank()) {
+            return false;
+        }
+
+        for (int index = 0; index < value.length(); index++) {
+            if (!Character.isDigit(value.charAt(index))) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private JsonNode normalizeRowsNode(JsonNode node) {

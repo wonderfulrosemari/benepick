@@ -43,6 +43,8 @@ app:
       - ${FRONTEND_ORIGIN:http://localhost:5173}
 
 catalog:
+  product-url-overrides:
+    path: ${CATALOG_PRODUCT_URL_OVERRIDES_PATH:./config/product-url-overrides.properties}
   finlife:
     base-url: ${FINLIFE_BASE_URL:https://finlife.fss.or.kr/finlifeapi}
     auth-key: ${FINLIFE_AUTH_KEY:}
@@ -73,11 +75,12 @@ catalog:
       service-key: ${CARD_PUBLIC_ALL_SERVICE_KEY:}
       include-kdb: ${CARD_PUBLIC_ALL_INCLUDE_KDB:true}
       include-krpost: ${CARD_PUBLIC_ALL_INCLUDE_KRPOST:true}
-      include-finance-stats: ${CARD_PUBLIC_ALL_INCLUDE_FINANCE_STATS:true}
+      include-finance-stats: ${CARD_PUBLIC_ALL_INCLUDE_FINANCE_STATS:false}
       kdb:
         url: ${CARD_PUBLIC_ALL_KDB_URL:https://apis.data.go.kr/B190030/GetCardProductInfoService/getCardProductList}
         page-no: ${CARD_PUBLIC_ALL_KDB_PAGE_NO:1}
         num-of-rows: ${CARD_PUBLIC_ALL_KDB_NUM_OF_ROWS:500}
+        max-pages: ${CARD_PUBLIC_ALL_KDB_MAX_PAGES:20}
         start-date: ${CARD_PUBLIC_ALL_KDB_START_DATE:20210101}
         end-date: ${CARD_PUBLIC_ALL_KDB_END_DATE:20991231}
         force-json: ${CARD_PUBLIC_ALL_KDB_FORCE_JSON:true}
@@ -85,10 +88,11 @@ catalog:
         default-provider-name: ${CARD_PUBLIC_ALL_KDB_PROVIDER:한국산업은행}
         official-url-fallback: ${CARD_PUBLIC_ALL_KDB_URL_FALLBACK:https://www.kdb.co.kr}
       krpost:
-        url: ${CARD_PUBLIC_ALL_KRPOST_URL:https://opap.ipostbank.co.kr/data/CheckcardGoods}
+        url: ${CARD_PUBLIC_ALL_KRPOST_URL:https://apis.data.go.kr/1721301/KrpostCardProductView/CheckcardGoods}
         page-no: ${CARD_PUBLIC_ALL_KRPOST_PAGE_NO:1}
         num-of-rows: ${CARD_PUBLIC_ALL_KRPOST_NUM_OF_ROWS:200}
-        product-name-keyword: ${CARD_PUBLIC_ALL_KRPOST_PRODUCT_NAME:브라보}
+        max-pages: ${CARD_PUBLIC_ALL_KRPOST_MAX_PAGES:20}
+        product-name-keyword: ${CARD_PUBLIC_ALL_KRPOST_PRODUCT_NAME:카드}
         items-path: ${CARD_PUBLIC_ALL_KRPOST_ITEMS_PATH:response.body.items.item}
         default-provider-name: ${CARD_PUBLIC_ALL_KRPOST_PROVIDER:우체국}
         official-url-fallback: ${CARD_PUBLIC_ALL_KRPOST_URL_FALLBACK:https://www.epostbank.go.kr}
@@ -96,10 +100,11 @@ catalog:
         url: ${CARD_PUBLIC_ALL_FIN_STATS_URL:https://apis.data.go.kr/1160100/service/GetCredCardCompInfoService/getCredCardCompGeneInfo}
         page-no: ${CARD_PUBLIC_ALL_FIN_STATS_PAGE_NO:1}
         num-of-rows: ${CARD_PUBLIC_ALL_FIN_STATS_NUM_OF_ROWS:500}
-        title: ${CARD_PUBLIC_ALL_FIN_STATS_TITLE:신용카드사 일반현황}
+        max-pages: ${CARD_PUBLIC_ALL_FIN_STATS_MAX_PAGES:20}
+        title: ${CARD_PUBLIC_ALL_FIN_STATS_TITLE:신용카드_일반현황_임직원현황}
         base-year-month: ${CARD_PUBLIC_ALL_FIN_STATS_BASYM:}
         result-type: ${CARD_PUBLIC_ALL_FIN_STATS_RESULT_TYPE:json}
-        items-path: ${CARD_PUBLIC_ALL_FIN_STATS_ITEMS_PATH:response.body.items.item}
+        items-path: ${CARD_PUBLIC_ALL_FIN_STATS_ITEMS_PATH:response.body.tableList[0].items.item}
         default-provider-name: ${CARD_PUBLIC_ALL_FIN_STATS_PROVIDER:신용카드사}
         official-url-fallback: ${CARD_PUBLIC_ALL_FIN_STATS_URL_FALLBACK:https://www.fsc.go.kr}
 
@@ -143,3 +148,16 @@ recommendation:
       high-annual-fee-penalty-weight: ${REC_SCORE_CARD_HIGH_FEE_PENALTY:6}
       daily-spend-threshold: ${REC_SCORE_CARD_DAILY_THRESHOLD:80}
       high-annual-fee-threshold-won: ${REC_SCORE_CARD_HIGH_FEE_THRESHOLD_WON:20000}
+  quality:
+    enabled: ${REC_QUALITY_ENABLED:true}
+    startup-enabled: ${REC_QUALITY_STARTUP_ENABLED:true}
+    scheduled-enabled: ${REC_QUALITY_SCHEDULED_ENABLED:true}
+    cron: ${REC_QUALITY_CRON:0 10 4 * * *}
+    zone: ${REC_QUALITY_ZONE:Asia/Seoul}
+    window-days: ${REC_QUALITY_WINDOW_DAYS:14}
+    min-recommended-products: ${REC_QUALITY_MIN_RECOMMENDED:20}
+    low-ctr-percent: ${REC_QUALITY_LOW_CTR:5}
+    high-ctr-percent: ${REC_QUALITY_HIGH_CTR:18}
+    low-cvr-percent: ${REC_QUALITY_LOW_CVR:3}
+    high-cvr-percent: ${REC_QUALITY_HIGH_CVR:12}
+    max-weight-adjustment-percent: ${REC_QUALITY_MAX_WEIGHT_DELTA:20}

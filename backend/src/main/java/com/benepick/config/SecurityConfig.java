@@ -46,7 +46,7 @@ public class SecurityConfig {
             .authorizeHttpRequests(auth -> auth
                 .requestMatchers("/error", "/actuator/health").permitAll()
                 .requestMatchers("/api/recommendations/**").permitAll()
-                .requestMatchers(HttpMethod.GET, "/api/catalog/summary").permitAll()
+                .requestMatchers(HttpMethod.GET, "/api/catalog/summary", "/api/catalog/sync/status").permitAll()
                 .requestMatchers(HttpMethod.POST, "/api/catalog/sync/finlife", "/api/catalog/sync/cards/external").permitAll()
                 .requestMatchers(HttpMethod.POST, "/api/auth/google", "/api/auth/refresh", "/api/auth/logout").permitAll()
                 .requestMatchers(HttpMethod.GET, "/api/auth/me").authenticated()

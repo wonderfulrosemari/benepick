@@ -1,12 +1,14 @@
 package com.benepick.recommendation.controller;
 
 import com.benepick.recommendation.dto.RecommendationAnalyticsResponse;
+import com.benepick.recommendation.dto.RecommendationQualityReportResponse;
 import com.benepick.recommendation.dto.RecommendationRedirectRequest;
 import com.benepick.recommendation.dto.RecommendationRedirectResponse;
 import com.benepick.recommendation.dto.RecommendationRunHistoryItemResponse;
 import com.benepick.recommendation.dto.RecommendationRunResponse;
 import com.benepick.recommendation.dto.SimulateRecommendationRequest;
 import com.benepick.recommendation.service.RecommendationAnalyticsService;
+import com.benepick.recommendation.service.RecommendationQualityLoopService;
 import com.benepick.recommendation.service.RecommendationService;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
@@ -26,13 +28,16 @@ public class RecommendationController {
 
     private final RecommendationService recommendationService;
     private final RecommendationAnalyticsService recommendationAnalyticsService;
+    private final RecommendationQualityLoopService recommendationQualityLoopService;
 
     public RecommendationController(
         RecommendationService recommendationService,
-        RecommendationAnalyticsService recommendationAnalyticsService
+        RecommendationAnalyticsService recommendationAnalyticsService,
+        RecommendationQualityLoopService recommendationQualityLoopService
     ) {
         this.recommendationService = recommendationService;
         this.recommendationAnalyticsService = recommendationAnalyticsService;
+        this.recommendationQualityLoopService = recommendationQualityLoopService;
     }
 
     @PostMapping("/simulate")
@@ -55,6 +60,16 @@ public class RecommendationController {
     @GetMapping("/{runId}/analytics")
     public RecommendationAnalyticsResponse getAnalytics(@PathVariable UUID runId) {
         return recommendationAnalyticsService.getAnalytics(runId);
+    }
+
+    @GetMapping("/quality/latest")
+    public RecommendationQualityReportResponse getLatestQualityReport() {
+        return recommendationQualityLoopService.getLatestReport();
+    }
+
+    @PostMapping("/quality/recompute")
+    public RecommendationQualityReportResponse recomputeQualityReport() {
+        return recommendationQualityLoopService.recomputeAndStore("manual-api");
     }
 
     @PostMapping("/{runId}/redirect")

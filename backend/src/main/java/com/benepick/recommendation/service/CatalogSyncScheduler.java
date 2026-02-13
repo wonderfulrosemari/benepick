@@ -15,12 +15,12 @@ public class CatalogSyncScheduler {
 
     private static final Logger log = LoggerFactory.getLogger(CatalogSyncScheduler.class);
 
-    private final CatalogSyncService catalogSyncService;
+    private final CatalogSyncStatusService catalogSyncStatusService;
     private final CatalogSyncSchedulerProperties properties;
     private final AtomicBoolean running = new AtomicBoolean(false);
 
-    public CatalogSyncScheduler(CatalogSyncService catalogSyncService, CatalogSyncSchedulerProperties properties) {
-        this.catalogSyncService = catalogSyncService;
+    public CatalogSyncScheduler(CatalogSyncStatusService catalogSyncStatusService, CatalogSyncSchedulerProperties properties) {
+        this.catalogSyncStatusService = catalogSyncStatusService;
         this.properties = properties;
     }
 
@@ -50,7 +50,7 @@ public class CatalogSyncScheduler {
         try {
             if (properties.isFinlifeEnabled()) {
                 try {
-                    FinlifeSyncResponse finlife = catalogSyncService.syncAccountsFromFinlife();
+                    FinlifeSyncResponse finlife = catalogSyncStatusService.syncFinlifeWithStatus(trigger);
                     log.info(
                         "Catalog finlife sync completed (trigger={}, fetched={}, upserted={}, deactivated={}, skipped={})",
                         trigger,
@@ -66,7 +66,7 @@ public class CatalogSyncScheduler {
 
             if (properties.isCardsEnabled()) {
                 try {
-                    CardExternalSyncResponse cards = catalogSyncService.syncCardsFromExternal();
+                    CardExternalSyncResponse cards = catalogSyncStatusService.syncCardsWithStatus(trigger);
                     log.info(
                         "Catalog card sync completed (trigger={}, fetched={}, upserted={}, deactivated={}, skipped={})",
                         trigger,

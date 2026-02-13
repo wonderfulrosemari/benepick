@@ -7,3 +7,6 @@ out
 config/secrets.properties
 config/secrets-local.properties
 config/secrets-*.properties
+
+config/product-url-overrides.properties
+config/product-url-overrides-local.properties

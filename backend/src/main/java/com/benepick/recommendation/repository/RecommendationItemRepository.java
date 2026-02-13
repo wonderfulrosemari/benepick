@@ -10,6 +10,8 @@ public interface RecommendationItemRepository extends JpaRepository<Recommendati
 
     List<RecommendationItemEntity> findByRecommendationRun_IdOrderByProductTypeAscRankAsc(UUID recommendationRunId);
 
+    List<RecommendationItemEntity> findByRecommendationRun_IdIn(List<UUID> recommendationRunIds);
+
     Optional<RecommendationItemEntity> findByRecommendationRun_IdAndProductTypeAndProductId(
         UUID recommendationRunId,
         String productType,

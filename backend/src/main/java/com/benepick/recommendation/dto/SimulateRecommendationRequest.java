@@ -19,6 +19,10 @@ public record SimulateRecommendationRequest(
     @NotBlank
     String priority,
 
+    String accountPriority,
+
+    String cardPriority,
+
     @NotBlank
     String salaryTransfer,
 

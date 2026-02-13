@@ -1,5 +1,7 @@
 package com.benepick.recommendation.dto;
 
+import java.util.List;
+
 public record RecommendationItemResponse(
     int rank,
     String productType,
@@ -9,6 +11,12 @@ public record RecommendationItemResponse(
     String summary,
     String meta,
     int score,
-    String reason
+    String reason,
+    int minExpectedMonthlyBenefit,
+    int expectedMonthlyBenefit,
+    int maxExpectedMonthlyBenefit,
+    String estimateMethod,
+    List<RecommendationBundleBenefitComponentResponse> benefitComponents,
+    List<RecommendationDetailFieldResponse> detailFields
 ) {
 }

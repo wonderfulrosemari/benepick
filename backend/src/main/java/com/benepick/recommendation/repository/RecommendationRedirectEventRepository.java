@@ -9,5 +9,7 @@ public interface RecommendationRedirectEventRepository extends JpaRepository<Rec
 
     List<RecommendationRedirectEventEntity> findByRecommendationRunId(UUID recommendationRunId);
 
+    List<RecommendationRedirectEventEntity> findByRecommendationRunIdIn(List<UUID> recommendationRunIds);
+
     long countByRecommendationRunId(UUID recommendationRunId);
 }

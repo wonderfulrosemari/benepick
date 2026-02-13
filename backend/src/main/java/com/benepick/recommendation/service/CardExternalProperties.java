@@ -90,7 +90,7 @@ public class CardExternalProperties {
 
         private boolean includeKrpost = true;
 
-        private boolean includeFinanceStats = true;
+        private boolean includeFinanceStats = false;
 
         private Kdb kdb = new Kdb();
 
@@ -109,13 +109,15 @@ public class CardExternalProperties {
 
         private String numOfRows = "500";
 
+        private int maxPages = 20;
+
         private String startDate = "20210101";
 
         private String endDate = "20991231";
 
         private boolean forceJson = true;
 
-        private String itemsPath = "response.body.items.item";
+        private String itemsPath = "response.body.tableList[0].items.item";
 
         private String defaultProviderName = "한국산업은행";
 
@@ -126,13 +128,15 @@ public class CardExternalProperties {
     @Setter
     public static class Krpost {
 
-        private String url = "https://opap.ipostbank.co.kr/data/CheckcardGoods";
+        private String url = "https://apis.data.go.kr/1721301/KrpostCardProductView/CheckcardGoods";
 
         private String pageNo = "1";
 
         private String numOfRows = "200";
 
-        private String productNameKeyword = "브라보";
+        private int maxPages = 20;
+
+        private String productNameKeyword = "카드";
 
         private String itemsPath = "response.body.items.item";
 
@@ -151,7 +155,9 @@ public class CardExternalProperties {
 
         private String numOfRows = "500";
 
-        private String title = "신용카드사 일반현황";
+        private int maxPages = 20;
+
+        private String title = "신용카드_일반현황_임직원현황";
 
         /**
          * 비워두면 코드에서 전달 시점의 전달월(yyyyMM) 자동 사용
