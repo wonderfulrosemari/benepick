@@ -21,6 +21,8 @@ type ProductCardProps = {
   onAction?: () => void;
   actionLoading?: boolean;
   highlightKeywords?: string[];
+  clickCount?: number;
+  clickRatePercent?: number;
 };
 
 const EMPHASIS_NUMBER_SPLIT_REGEX = /(최고\s*\d+(?:\.\d+)?\s*%|기본\s*\d+(?:\.\d+)?\s*%|월\s*최대\s*\d[\d,]*(?:\.\d+)?\s*(?:만원|원)|최대\s*\d[\d,]*(?:\.\d+)?\s*(?:만원|원)|\d+(?:\.\d+)?\s*%|\+?\d[\d,]*(?:\.\d+)?\s*(?:만원|원))/g;
@@ -202,7 +204,9 @@ function ProductCard({
   actionLabel,
   onAction,
   actionLoading,
-  highlightKeywords
+  highlightKeywords,
+  clickCount,
+  clickRatePercent
 }: ProductCardProps) {
   const [expanded, setExpanded] = useState(false);
   const [benefitHovered, setBenefitHovered] = useState(false);
@@ -324,6 +328,9 @@ function ProductCard({
         </div>
       </div>
       <h4>{title}</h4>
+      {typeof clickCount === "number" && typeof clickRatePercent === "number" ? (
+        <p className="click-metric">클릭 {clickCount}회 · 클릭률 {clickRatePercent.toFixed(1)}%</p>
+      ) : null}
       <p className="summary">{renderEmphasizedText(summary, `summary-${rank}`, highlightMatchers)}</p>
       <p className="meta">{renderEmphasizedText(meta, `meta-${rank}`, highlightMatchers)}</p>
       <p className="reason">{renderEmphasizedText(reasonPreview, `reason-${rank}`, highlightMatchers)}</p>

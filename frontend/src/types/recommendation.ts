@@ -13,6 +13,8 @@ export type SimulateRecommendationRequest = {
   salaryTransfer: "yes" | "no";
   travelLevel: TravelLevel;
   categories: string[];
+  accountCategories?: string[];
+  cardCategories?: string[];
 };
 
 export type RecommendationDetailField = {

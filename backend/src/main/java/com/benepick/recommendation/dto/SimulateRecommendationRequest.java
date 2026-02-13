@@ -30,6 +30,10 @@ public record SimulateRecommendationRequest(
     String travelLevel,
 
     @NotNull
-    List<String> categories
+    List<String> categories,
+
+    List<String> accountCategories,
+
+    List<String> cardCategories
 ) {
 }

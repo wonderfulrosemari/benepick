@@ -266,7 +266,7 @@ public class RecommendationService {
         String priority = resolveAccountPriority(request);
         String salaryTransfer = normalize(request.salaryTransfer());
         String travelLevel = normalize(request.travelLevel());
-        Set<String> userCategories = canonicalizeCategories(request.categories());
+        Set<String> userCategories = resolveAccountUserCategories(request);
         RecommendationScoringProperties.Account accountScore = scoringProperties.resolvedAccount();
         Set<String> accountIntentSignals = buildAccountIntentSignals(request, priority, salaryTransfer, travelLevel, userCategories, accountScore);
 
@@ -435,7 +435,7 @@ public class RecommendationService {
     ) {
         String priority = resolveCardPriority(request);
         String travelLevel = normalize(request.travelLevel());
-        Set<String> userCategories = canonicalizeCategories(request.categories());
+        Set<String> userCategories = resolveCardUserCategories(request);
 
         List<CardCatalogEntity> candidates = cardCatalogRepository.findByActiveTrue().stream()
             .filter(candidate -> !lowerSet(candidate.getTags()).contains("stat-only"))
@@ -863,6 +863,22 @@ public class RecommendationService {
         return joinReasons(reasons);
     }
 
+
+    private Set<String> resolveAccountUserCategories(SimulateRecommendationRequest request) {
+        Set<String> accountCategories = canonicalizeCategories(request.accountCategories());
+        if (!accountCategories.isEmpty()) {
+            return accountCategories;
+        }
+        return canonicalizeCategories(request.categories());
+    }
+
+    private Set<String> resolveCardUserCategories(SimulateRecommendationRequest request) {
+        Set<String> cardCategories = canonicalizeCategories(request.cardCategories());
+        if (!cardCategories.isEmpty()) {
+            return cardCategories;
+        }
+        return canonicalizeCategories(request.categories());
+    }
 
     private Set<String> buildAccountIntentSignals(
         SimulateRecommendationRequest request,

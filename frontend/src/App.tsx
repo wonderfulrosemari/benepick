@@ -106,7 +106,6 @@ function App() {
     const [loadingRun, setLoadingRun] = useState(false);
     const [runHistory, setRunHistory] = useState<RecommendationRunHistoryItem[]>([]);
     const [historyLoading, setHistoryLoading] = useState(false);
-    const [analyticsLoading, setAnalyticsLoading] = useState(false);
     const [catalogSummary, setCatalogSummary] = useState<CatalogSummaryResponse | null>(null);
     const [catalogLoading, setCatalogLoading] = useState(false);
     const [copied, setCopied] = useState(false);
@@ -152,14 +151,11 @@ function App() {
     };
 
     const loadAnalytics = async (runId: string) => {
-        setAnalyticsLoading(true);
         try {
             const response = await getRecommendationAnalytics(runId);
             setAnalytics(response);
         } catch {
             setAnalytics(null);
-        } finally {
-            setAnalyticsLoading(false);
         }
     };
 
@@ -207,6 +203,8 @@ function App() {
             const response = await simulateRecommendations({
                 ...profile,
                 categories: mergedCategories,
+                accountCategories: accountFilters,
+                cardCategories: cardFilters,
             });
             setResult(response);
             setRunLookupId(response.runId);
@@ -267,19 +265,6 @@ function App() {
         }
     };
 
-    const formatClickedAt = (value: string | null) => {
-        if (!value) {
-            return '-';
-        }
-
-        const date = new Date(value);
-        if (Number.isNaN(date.getTime())) {
-            return value;
-        }
-
-        return date.toLocaleString('ko-KR', { hour12: false });
-    };
-
     const formatHistoryTime = (value: string) => {
         const date = new Date(value);
         if (Number.isNaN(date.getTime())) {
@@ -335,6 +320,27 @@ function App() {
         profile.salaryTransfer,
         profile.travelLevel,
     ]);
+
+    const clickStatsByProduct = useMemo(() => {
+        const stats = new Map<string, { clickCount: number; clickRatePercent: number }>();
+        if (!analytics) {
+            return stats;
+        }
+
+        const totalRedirects = Math.max(analytics.totalRedirects, 0);
+        for (const item of analytics.topClickedProducts) {
+            const key = `${item.productType}:${item.productId}`;
+            const clickRatePercent = totalRedirects > 0
+                ? Math.round((item.clickCount / totalRedirects) * 1000) / 10
+                : 0;
+            stats.set(key, {
+                clickCount: item.clickCount,
+                clickRatePercent,
+            });
+        }
+
+        return stats;
+    }, [analytics]);
 
     return (
         <div className="app">
@@ -613,83 +619,8 @@ function App() {
                         </div>
                     </div>
 
-                    {result ? (
-                        <article className="panel analytics-panel">
-                            <h3>추천 클릭 분석</h3>
-                            {analyticsLoading ? (
-                                <p className="analytics-loading">분석 불러오는 중...</p>
-                            ) : analytics ? (
-                                <>
-                                    <div className="analytics-kpis">
-                                        <div className="analytics-kpi">
-                                            <p className="analytics-kpi-label">총 클릭</p>
-                                            <p className="analytics-kpi-value">{analytics.totalRedirects}</p>
-                                        </div>
-                                        <div className="analytics-kpi">
-                                            <p className="analytics-kpi-label">클릭된 상품 수</p>
-                                            <p className="analytics-kpi-value">{analytics.uniqueClickedProducts}</p>
-                                        </div>
-                                        <div className="analytics-kpi">
-                                            <p className="analytics-kpi-label">상품 클릭 도달률</p>
-                                            <p className="analytics-kpi-value">{analytics.uniqueClickRatePercent}%</p>
-                                        </div>
-                                    </div>
-
-                                    {analytics.categoryStats.length > 0 ? (
-                                        <div className="analytics-category-table-wrap">
-                                            <table className="analytics-category-table">
-                                                <thead>
-                                                    <tr>
-                                                        <th>카테고리</th>
-                                                        <th>추천수</th>
-                                                        <th>클릭수</th>
-                                                        <th>클릭률</th>
-                                                        <th>전환률</th>
-                                                    </tr>
-                                                </thead>
-                                                <tbody>
-                                                    {analytics.categoryStats.map((row) => (
-                                                        <tr key={`category-${row.categoryKey}`}>
-                                                            <td>{row.categoryLabel}</td>
-                                                            <td>{row.recommendedProducts}</td>
-                                                            <td>{row.totalRedirects}</td>
-                                                            <td>{row.clickRatePercent}%</td>
-                                                            <td>{row.conversionRatePercent}%</td>
-                                                        </tr>
-                                                    ))}
-                                                </tbody>
-                                            </table>
-                                        </div>
-                                    ) : null}
-
-                                    {analytics.topClickedProducts.length > 0 ? (
-                                        <ul className="analytics-list">
-                                            {analytics.topClickedProducts.map((item) => (
-                                                <li
-                                                    key={`analytics-${item.productType}-${item.productId}`}
-                                                    className="analytics-item"
-                                                >
-                                                    <p className="analytics-item-title">
-                                                        {item.productType} #{item.rank} · {item.provider} · {item.name}
-                                                    </p>
-                                                    <p className="analytics-item-meta">
-                                                        클릭 {item.clickCount}회 · 마지막 클릭{' '}
-                                                        {formatClickedAt(item.lastClickedAt)}
-                                                    </p>
-                                                </li>
-                                            ))}
-                                        </ul>
-                                    ) : (
-                                        <p className="analytics-empty">아직 클릭 데이터가 없습니다.</p>
-                                    )}
-                                </>
-                            ) : (
-                                <p className="analytics-empty">분석 데이터를 불러오지 못했습니다.</p>
-                            )}
-                        </article>
-                    ) : null}
-
                     {!result ? (
+
                         <div className="empty-state panel">추천 계산을 실행하면 결과가 표시됩니다.</div>
                     ) : (
                         <div className="result-grid">
@@ -712,6 +643,8 @@ function App() {
                                                 maxExpectedMonthlyBenefit={item.maxExpectedMonthlyBenefit}
                                                 benefitComponents={item.benefitComponents}
                                                 detailFields={item.detailFields}
+                                                clickCount={analytics ? (clickStatsByProduct.get(key)?.clickCount ?? 0) : undefined}
+                                                clickRatePercent={analytics ? (clickStatsByProduct.get(key)?.clickRatePercent ?? 0) : undefined}
                                                 highlightKeywords={highlightKeywords}
                                                 actionLabel={resolveActionLabel(item)}
                                                 actionLoading={redirectingKey === key}
@@ -741,6 +674,8 @@ function App() {
                                                 maxExpectedMonthlyBenefit={item.maxExpectedMonthlyBenefit}
                                                 benefitComponents={item.benefitComponents}
                                                 detailFields={item.detailFields}
+                                                clickCount={analytics ? (clickStatsByProduct.get(key)?.clickCount ?? 0) : undefined}
+                                                clickRatePercent={analytics ? (clickStatsByProduct.get(key)?.clickRatePercent ?? 0) : undefined}
                                                 highlightKeywords={highlightKeywords}
                                                 actionLabel={resolveActionLabel(item)}
                                                 actionLoading={redirectingKey === key}

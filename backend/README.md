@@ -58,6 +58,11 @@ cp config/secrets.example.properties config/secrets.properties
 - `GET /api/recommendations/{runId}/analytics`
 - `POST /api/recommendations/{runId}/redirect`
 
+`simulate` 요청 필드(주요):
+- `categories`: 하위 호환용 통합 카테고리
+- `accountCategories`: 계좌 점수 계산 전용 카테고리
+- `cardCategories`: 카드 점수 계산 전용 카테고리
+
 ## 카탈로그 API
 
 - `GET /api/catalog/summary`
