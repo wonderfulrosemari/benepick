@@ -3,3 +3,7 @@ build
 out
 .DS_Store
 *.iml
+
+config/secrets.properties
+config/secrets-local.properties
+config/secrets-*.properties

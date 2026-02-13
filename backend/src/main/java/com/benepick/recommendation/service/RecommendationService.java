@@ -235,7 +235,9 @@ public class RecommendationService {
         String travelLevel = normalize(request.travelLevel());
         Set<String> categorySet = lowerSet(request.categories());
 
-        List<CardCatalogEntity> candidates = cardCatalogRepository.findByActiveTrue();
+        List<CardCatalogEntity> candidates = cardCatalogRepository.findByActiveTrue().stream()
+            .filter(candidate -> !lowerSet(candidate.getTags()).contains("stat-only"))
+            .toList();
         if (candidates.isEmpty()) {
             throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "Card catalog is empty");
         }

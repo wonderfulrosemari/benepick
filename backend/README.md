@@ -8,6 +8,26 @@ Spring Boot 기반 백엔드입니다.
 ./gradlew bootRun
 ```
 
+## 로컬 비밀키 파일(권장)
+
+`backend/src/main/resources/application.yml`에서 아래 파일을 자동 로드하도록 설정했습니다.
+
+- `backend/config/secrets.properties`
+- `backend/config/secrets-local.properties`
+
+실행 절차:
+
+```bash
+cd backend
+cp config/secrets.example.properties config/secrets.properties
+# secrets.properties에 실제 키 입력
+./gradlew bootRun
+```
+
+주의:
+- `config/secrets.properties`는 `.gitignore`로 제외되어 Git에 올라가지 않습니다.
+- IntelliJ Run Configuration 환경변수를 계속 써도 되지만, 배포/운영은 Secret Manager 또는 서버 환경변수로 관리하는 것을 권장합니다.
+
 ## 필수 환경 변수
 
 - `GOOGLE_CLIENT_ID`
@@ -17,9 +37,10 @@ Spring Boot 기반 백엔드입니다.
 ## 선택 환경 변수
 
 - `FINLIFE_AUTH_KEY`: 금융감독원 금융상품한눈에 API 키
-- `CARD_EXTERNAL_SOURCE_URL`: 외부 카드 JSON 소스 URL 또는 파일 경로
-  - 파일 예시: `/Users/jojinhyeok/IdeaProjects/recommend/backend/examples/card-external-sample.json`
-  - URL 예시: `https://raw.githubusercontent.com/<owner>/<repo>/<branch>/backend/examples/card-external-sample.json`
+- 카드 외부 동기화 모드
+  - `CARD_EXTERNAL_MODE=source` (기본): JSON 파일/URL
+  - `CARD_EXTERNAL_MODE=public-data`: 공공데이터 API 단일 소스
+  - `CARD_EXTERNAL_MODE=public-data-all`: 공공데이터 API 다중 소스(KDB/우체국/금융위)
 
 ## 인증 API
 
@@ -43,15 +64,49 @@ Spring Boot 기반 백엔드입니다.
 - `POST /api/catalog/sync/cards/external`
 
 `sync/finlife`는 금융상품한눈에 API(`FINLIFE_AUTH_KEY`)로 예금/적금 데이터를 동기화합니다.  
-`sync/cards/external`은 외부 카드 JSON 소스(`CARD_EXTERNAL_SOURCE_URL`)를 동기화합니다.
+`sync/cards/external`은 카드 외부 소스를 동기화합니다.
 
-## 운영 URL 연동 절차
+## 카드 외부 소스 설정
 
-1. 외부 카드 JSON을 고정 URL로 준비합니다.
-2. 백엔드 환경변수 `CARD_EXTERNAL_SOURCE_URL`에 URL을 설정합니다.
-3. 백엔드 재시작 후 아래 호출로 동기화합니다.
+### 1) JSON 소스 모드 (`source`)
+
+```env
+CARD_EXTERNAL_MODE=source
+CARD_EXTERNAL_SOURCE_URL=/Users/jojinhyeok/IdeaProjects/recommend/backend/examples/card-external-sample.json
+```
+
+### 2) 공공데이터 단일 소스 모드 (`public-data`)
+
+```env
+CARD_EXTERNAL_MODE=public-data
+CARD_PUBLIC_DATA_URL=https://apis.data.go.kr/<service>/<endpoint>
+CARD_PUBLIC_DATA_SERVICE_KEY=발급받은키
+CARD_PUBLIC_DATA_ITEMS_PATH=response.body.items.item
+```
+
+### 3) 공공데이터 다중 소스 모드 (`public-data-all`)
+
+```env
+CARD_EXTERNAL_MODE=public-data-all
+CARD_PUBLIC_ALL_SERVICE_KEY=발급받은키
+CARD_PUBLIC_ALL_INCLUDE_KDB=true
+CARD_PUBLIC_ALL_INCLUDE_KRPOST=true
+CARD_PUBLIC_ALL_INCLUDE_FINANCE_STATS=true
+```
+
+기본 내장 소스:
+- 한국산업은행 카드상품 정보 (`B190030`)
+- 우체국 체크카드상품 정보 (`1721301`)
+- 금융위원회 신용카드사 통계 (`1160100`)
+
+참고:
+- 금융위 통계 데이터는 카드 카탈로그에는 저장되지만 `stat-only` 태그로 저장되며 추천 랭킹 계산에서는 제외됩니다.
+- XML 응답 API도 자동 파싱(JSON/XML)을 지원합니다.
+
+## 동기화 확인
 
 ```bash
+curl -s -X POST http://localhost:8080/api/catalog/sync/finlife
 curl -s -X POST http://localhost:8080/api/catalog/sync/cards/external
 curl -s http://localhost:8080/api/catalog/summary
 ```
@@ -67,3 +122,27 @@ curl -s http://localhost:8080/api/catalog/summary
 
 Benepick은 추천 및 공식 사이트 이동(redirect)까지 제공하며,
 실제 계좌 개설/이체/카드 발급 같은 은행 업무는 수행하지 않습니다.
+
+## 카탈로그 자동 동기화 스케줄
+
+기본값은 다음과 같습니다.
+
+- 앱 시작 직후 1회 자동 동기화
+- 매일 03:30 (Asia/Seoul) 자동 동기화
+
+환경변수로 제어:
+
+```env
+CATALOG_SYNC_ENABLED=true
+CATALOG_SYNC_STARTUP_ENABLED=true
+CATALOG_SYNC_SCHEDULED_ENABLED=true
+CATALOG_SYNC_FINLIFE_ENABLED=true
+CATALOG_SYNC_CARDS_ENABLED=true
+CATALOG_SYNC_CRON=0 30 3 * * *
+CATALOG_SYNC_ZONE=Asia/Seoul
+```
+
+예시:
+- 시작 시 자동 동기화만 끄기: `CATALOG_SYNC_STARTUP_ENABLED=false`
+- 계좌 동기화만 끄기: `CATALOG_SYNC_FINLIFE_ENABLED=false`
+- 정기 스케줄만 끄기: `CATALOG_SYNC_SCHEDULED_ENABLED=false`

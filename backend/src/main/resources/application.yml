@@ -1,6 +1,10 @@
 spring:
   application:
     name: benepick-backend
+  config:
+    import:
+      - optional:file:./config/secrets.properties
+      - optional:file:./config/secrets-local.properties
   datasource:
     url: ${DB_URL:jdbc:postgresql://localhost:5432/benepick}
     username: ${DB_USERNAME:${USER:postgres}}
@@ -48,6 +52,62 @@ catalog:
     connect-timeout-ms: ${FINLIFE_CONNECT_TIMEOUT_MS:5000}
     read-timeout-ms: ${FINLIFE_READ_TIMEOUT_MS:12000}
   card-external:
+    mode: ${CARD_EXTERNAL_MODE:source}
     source-url: ${CARD_EXTERNAL_SOURCE_URL:}
     connect-timeout-ms: ${CARD_EXTERNAL_CONNECT_TIMEOUT_MS:4000}
     read-timeout-ms: ${CARD_EXTERNAL_READ_TIMEOUT_MS:10000}
+    public-data:
+      url: ${CARD_PUBLIC_DATA_URL:}
+      service-key: ${CARD_PUBLIC_DATA_SERVICE_KEY:}
+      service-key-param: ${CARD_PUBLIC_DATA_SERVICE_KEY_PARAM:serviceKey}
+      page-no: ${CARD_PUBLIC_DATA_PAGE_NO:1}
+      num-of-rows: ${CARD_PUBLIC_DATA_NUM_OF_ROWS:200}
+      extra-query: ${CARD_PUBLIC_DATA_EXTRA_QUERY:}
+      items-path: ${CARD_PUBLIC_DATA_ITEMS_PATH:}
+      force-json: ${CARD_PUBLIC_DATA_FORCE_JSON:true}
+      default-provider-name: ${CARD_PUBLIC_DATA_DEFAULT_PROVIDER_NAME:}
+      official-url-fallback: ${CARD_PUBLIC_DATA_OFFICIAL_URL_FALLBACK:}
+      default-tags: ${CARD_PUBLIC_DATA_DEFAULT_TAGS:external}
+      default-categories: ${CARD_PUBLIC_DATA_DEFAULT_CATEGORIES:}
+    public-data-all:
+      service-key: ${CARD_PUBLIC_ALL_SERVICE_KEY:}
+      include-kdb: ${CARD_PUBLIC_ALL_INCLUDE_KDB:true}
+      include-krpost: ${CARD_PUBLIC_ALL_INCLUDE_KRPOST:true}
+      include-finance-stats: ${CARD_PUBLIC_ALL_INCLUDE_FINANCE_STATS:true}
+      kdb:
+        url: ${CARD_PUBLIC_ALL_KDB_URL:https://apis.data.go.kr/B190030/GetCardProductInfoService/getCardProductList}
+        page-no: ${CARD_PUBLIC_ALL_KDB_PAGE_NO:1}
+        num-of-rows: ${CARD_PUBLIC_ALL_KDB_NUM_OF_ROWS:500}
+        start-date: ${CARD_PUBLIC_ALL_KDB_START_DATE:20210101}
+        end-date: ${CARD_PUBLIC_ALL_KDB_END_DATE:20991231}
+        force-json: ${CARD_PUBLIC_ALL_KDB_FORCE_JSON:true}
+        items-path: ${CARD_PUBLIC_ALL_KDB_ITEMS_PATH:response.body.items.item}
+        default-provider-name: ${CARD_PUBLIC_ALL_KDB_PROVIDER:한국산업은행}
+        official-url-fallback: ${CARD_PUBLIC_ALL_KDB_URL_FALLBACK:https://www.kdb.co.kr}
+      krpost:
+        url: ${CARD_PUBLIC_ALL_KRPOST_URL:https://opap.ipostbank.co.kr/data/CheckcardGoods}
+        page-no: ${CARD_PUBLIC_ALL_KRPOST_PAGE_NO:1}
+        num-of-rows: ${CARD_PUBLIC_ALL_KRPOST_NUM_OF_ROWS:200}
+        product-name-keyword: ${CARD_PUBLIC_ALL_KRPOST_PRODUCT_NAME:브라보}
+        items-path: ${CARD_PUBLIC_ALL_KRPOST_ITEMS_PATH:response.body.items.item}
+        default-provider-name: ${CARD_PUBLIC_ALL_KRPOST_PROVIDER:우체국}
+        official-url-fallback: ${CARD_PUBLIC_ALL_KRPOST_URL_FALLBACK:https://www.epostbank.go.kr}
+      finance-stats:
+        url: ${CARD_PUBLIC_ALL_FIN_STATS_URL:https://apis.data.go.kr/1160100/service/GetCredCardCompInfoService/getCredCardCompGeneInfo}
+        page-no: ${CARD_PUBLIC_ALL_FIN_STATS_PAGE_NO:1}
+        num-of-rows: ${CARD_PUBLIC_ALL_FIN_STATS_NUM_OF_ROWS:500}
+        title: ${CARD_PUBLIC_ALL_FIN_STATS_TITLE:신용카드사 일반현황}
+        base-year-month: ${CARD_PUBLIC_ALL_FIN_STATS_BASYM:}
+        result-type: ${CARD_PUBLIC_ALL_FIN_STATS_RESULT_TYPE:json}
+        items-path: ${CARD_PUBLIC_ALL_FIN_STATS_ITEMS_PATH:response.body.items.item}
+        default-provider-name: ${CARD_PUBLIC_ALL_FIN_STATS_PROVIDER:신용카드사}
+        official-url-fallback: ${CARD_PUBLIC_ALL_FIN_STATS_URL_FALLBACK:https://www.fsc.go.kr}
+
+  sync:
+    enabled: ${CATALOG_SYNC_ENABLED:true}
+    startup-enabled: ${CATALOG_SYNC_STARTUP_ENABLED:true}
+    scheduled-enabled: ${CATALOG_SYNC_SCHEDULED_ENABLED:true}
+    finlife-enabled: ${CATALOG_SYNC_FINLIFE_ENABLED:true}
+    cards-enabled: ${CATALOG_SYNC_CARDS_ENABLED:true}
+    cron: ${CATALOG_SYNC_CRON:0 30 3 * * *}
+    zone: ${CATALOG_SYNC_ZONE:Asia/Seoul}
