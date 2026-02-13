@@ -415,13 +415,51 @@ public class CatalogSyncService {
             rateText = "금리 정보는 상세 페이지에서 확인";
         }
 
-        String conditionText = firstNonBlank(
-            normalizeSummarySource(product.specialCondition()),
-            normalizeSummarySource(product.etcNote()),
-            "우대조건은 상품설명서를 확인"
-        );
+        String conditionText = resolveConditionText(product);
 
         return rateText + " · " + conditionText;
+    }
+
+    private String resolveConditionText(FinlifeProduct product) {
+        String specialCondition = normalizeSummarySource(product.specialCondition());
+        String etcNote = normalizeSummarySource(product.etcNote());
+
+        if (specialCondition.isBlank() && etcNote.isBlank()) {
+            return "우대조건은 상품설명서를 확인";
+        }
+        if (specialCondition.isBlank()) {
+            return etcNote;
+        }
+        if (etcNote.isBlank()) {
+            return specialCondition;
+        }
+
+        boolean specialTruncated = isLikelyTruncatedText(specialCondition);
+        boolean etcTruncated = isLikelyTruncatedText(etcNote);
+
+        if (specialTruncated && !etcTruncated) {
+            return etcNote;
+        }
+        if (etcTruncated && !specialTruncated) {
+            return specialCondition;
+        }
+
+        if (specialCondition.equals(etcNote)) {
+            return specialCondition;
+        }
+        if (specialCondition.contains(etcNote)) {
+            return specialCondition;
+        }
+        if (etcNote.contains(specialCondition)) {
+            return etcNote;
+        }
+
+        return specialCondition + " · " + etcNote;
+    }
+
+    private boolean isLikelyTruncatedText(String value) {
+        String normalized = normalizeSummarySource(value);
+        return normalized.endsWith("...") || normalized.endsWith("…") || normalized.endsWith(".." );
     }
 
     private String resolveOfficialUrl(String finCoNo, Map<String, String> companyUrls) {

@@ -36,7 +36,7 @@ const cardCategoryOptions = [
 ];
 
 const accountPriorityLabel: Record<AccountPriority, string> = {
-    savings: '금리/저축 중심',
+    savings: '금리/저축',
     salary: '급여이체/주거래',
     starter: '간편/초보자',
     travel: '외화/해외 연계',

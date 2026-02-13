@@ -53,3 +53,13 @@
 - `692453d` feat(backend): add recommendation APIs and external catalog sync
 - `497c9fb` feat(frontend): add recommendation dashboard and history UI
 - `a3fa029` chore(frontend): remove generated TypeScript build artifacts
+
+## 추가 변경 (2026-02-14)
+- 프론트 텍스트 가독성 개선
+  - 추천 카드의 요약/메타/추천근거를 문단 단위로 렌더링해 가독성을 개선
+  - `점수구성:` 라인을 화면에서 제거해 핵심근거 중심으로 표시
+- 필터 키워드 정리
+  - 계좌 우선순위 라벨 `금리/저축 중심` -> `금리/저축`으로 변경
+- 계좌 핵심 설명 보강
+  - FinLife 요약 생성 시 `specialCondition`이 축약(`...`)인 경우 `etcNote` 우선 사용
+  - 두 설명이 서로 다를 경우 병합해 정보 손실을 줄임

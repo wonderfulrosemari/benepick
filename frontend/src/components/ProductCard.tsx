@@ -29,8 +29,9 @@ const EMPHASIS_NUMBER_SPLIT_REGEX = /(최고\s*\d+(?:\.\d+)?\s*%|기본\s*\d+(?:
 const EMPHASIS_NUMBER_TEST_REGEX = /^(최고\s*\d+(?:\.\d+)?\s*%|기본\s*\d+(?:\.\d+)?\s*%|월\s*최대\s*\d[\d,]*(?:\.\d+)?\s*(?:만원|원)|최대\s*\d[\d,]*(?:\.\d+)?\s*(?:만원|원)|\d+(?:\.\d+)?\s*%|\+?\d[\d,]*(?:\.\d+)?\s*(?:만원|원))$/;
 const EMPHASIS_KEYWORD_SPLIT_REGEX = /(가입대상|가입조건|우대조건|우대|조건|연회비|혜택|할인|캐시백|적립|한도|전월실적|급여이체|저축|금리|최고|기본|최대|최소)/g;
 const EMPHASIS_KEYWORD_TEST_REGEX = /^(가입대상|가입조건|우대조건|우대|조건|연회비|혜택|할인|캐시백|적립|한도|전월실적|급여이체|저축|금리|최고|기본|최대|최소)$/;
-const DESCRIPTION_LIST_SPLIT_REGEX = /(?=\s*(?:\d+\.\s*[가-힣A-Za-z(]|[가-힣]\.\s*[가-힣A-Za-z(]))/g;
-const READABLE_LINE_SPLIT_REGEX = /\s*·\s*/g;
+const PARAGRAPH_DELIMITER_REGEX = /\s*[·•]\s*/g;
+const NUMBERING_BREAK_REGEX = /\s+(?=(?:\d+|[가-힣])\.\s)/g;
+const READABLE_DETAIL_LABELS = new Set(["핵심 설명", "핵심 혜택", "정량 혜택"]);
 
 type HighlightMatchers = {
   splitRegex: RegExp;
@@ -144,54 +145,36 @@ function renderEmphasizedText(
     });
 }
 
-function parseCoreReason(reason: string): string[] {
-  const normalizedReason = (reason ?? "").replace(/\\n/g, "\n");
-  const lines = normalizedReason
-    .split(/\r?\n+/)
-    .map((line) => line.trim())
-    .filter(Boolean);
-
-  const coreLine = lines.find((line) => line.startsWith("핵심근거:")) ?? "";
-  if (coreLine) {
-    return coreLine
-      .replace(/^핵심근거:\s*/, "")
-      .split(" · ")
-      .map((value) => value.trim())
-      .filter(Boolean);
-  }
-
-  return normalizedReason
-    .replace(/\r?\n+/g, " · ")
-    .split("·")
-    .map((value) => value.trim())
-    .filter(Boolean);
+function normalizeText(value: string): string {
+  return (value ?? "").replace(/\\n/g, "\n").replace(/\r/g, "").trim();
 }
 
-function splitDescriptionParagraphs(value: string): string[] {
-  const compact = value.replace(/\s+/g, " ").trim();
-  if (!compact) {
-    return [];
-  }
-
-  return compact
-    .split("·")
-    .flatMap((segment) => segment.split(DESCRIPTION_LIST_SPLIT_REGEX))
-    .map((segment) => segment.trim())
-    .filter(Boolean);
-}
-
-function splitReadableLines(value: string): string[] {
-  const normalized = (value ?? "").replace(/\\n/g, "\n").replace(/\r/g, "").trim();
+function splitReadableParagraphs(value: string): string[] {
+  const normalized = normalizeText(value);
   if (!normalized) {
     return [];
   }
 
   return normalized
     .split(/\n+/)
-    .flatMap((line) => line.split(READABLE_LINE_SPLIT_REGEX))
-    .flatMap((line) => line.split(DESCRIPTION_LIST_SPLIT_REGEX))
+    .flatMap((line) => line.split(PARAGRAPH_DELIMITER_REGEX))
+    .flatMap((line) => line.split(NUMBERING_BREAK_REGEX))
     .map((line) => line.replace(/\s+/g, " ").trim())
     .filter(Boolean);
+}
+
+function sanitizeReasonText(value: string): string {
+  const normalized = normalizeText(value);
+  if (!normalized) {
+    return "";
+  }
+
+  return normalized
+    .split(/\n+/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    .filter((line) => !line.startsWith("점수구성:"))
+    .join("\n");
 }
 
 function formatSignedWon(value: number): string {
@@ -236,9 +219,9 @@ function ProductCard({
   );
   const hasDetails = normalizedDetails.length > 0;
 
-  const reasonPreviewLines = useMemo(() => parseCoreReason(reason).slice(0, 4), [reason]);
-  const summaryLines = useMemo(() => splitReadableLines(summary), [summary]);
-  const metaLines = useMemo(() => splitReadableLines(meta), [meta]);
+  const summaryParagraphs = useMemo(() => splitReadableParagraphs(summary), [summary]);
+  const metaParagraphs = useMemo(() => splitReadableParagraphs(meta), [meta]);
+  const reasonParagraphs = useMemo(() => splitReadableParagraphs(sanitizeReasonText(reason)), [reason]);
 
   const clearBenefitTooltipTimer = () => {
     if (benefitTooltipTimerRef.current !== null) {
@@ -267,52 +250,63 @@ function ProductCard({
     };
   }, []);
 
-  const renderDetailValue = (field: RecommendationDetailField, index: number) => {
-    const isDescriptionField = field.label === "핵심 설명" || field.label === "핵심 혜택";
-    if (!isDescriptionField) {
-      return renderEmphasizedText(field.value, `detail-${rank}-${index}`, highlightMatchers);
-    }
-
-    const paragraphs = splitDescriptionParagraphs(field.value);
-    if (paragraphs.length <= 1) {
-      return renderEmphasizedText(field.value, `detail-${rank}-${index}`, highlightMatchers);
-    }
-
-    return (
-      <ul className="detail-paragraph-list">
-        {paragraphs.map((paragraph, pIndex) => (
-          <li key={`detail-${rank}-${index}-${pIndex}`}>
-            {renderEmphasizedText(paragraph, `detail-${rank}-${index}-${pIndex}`, highlightMatchers)}
-          </li>
-        ))}
-      </ul>
-    );
-  };
-
   const renderReadableBlock = (
-    lines: string[],
-    keyPrefix: string,
+    paragraphs: string[],
     className: string,
-    withBullet = true
-  ) => {
-    if (lines.length === 0) {
+    keyPrefix: string
+  ): ReactNode => {
+    if (paragraphs.length === 0) {
       return null;
     }
 
-    if (lines.length === 1) {
+    if (paragraphs.length === 1) {
       return (
         <p className={className}>
-          {renderEmphasizedText(lines[0], `${keyPrefix}-single`, highlightMatchers)}
+          {renderEmphasizedText(paragraphs[0], `${keyPrefix}-single`, highlightMatchers)}
         </p>
       );
     }
 
     return (
-      <div className={`${className} multi`}>
-        {lines.map((line, index) => (
-          <p key={`${keyPrefix}-${index}`} className="text-line">
-            {withBullet ? <span className="text-line-bullet">•</span> : null}
-            {renderEmphasizedText(line, `${keyPrefix}-${index}`, highlightMatchers)}
+      <div className={`${className} readable-block`}>
+        {paragraphs.map((paragraph, index) => (
+          <p key={`${keyPrefix}-${index}`} className="readable-line">
+            {renderEmphasizedText(paragraph, `${keyPrefix}-${index}`, highlightMatchers)}
+          </p>
+        ))}
+      </div>
+    );
+  };
+
+  const renderDetailValue = (field: RecommendationDetailField, index: number) => {
+    const value = normalizeText(field.value);
+
+    if (!READABLE_DETAIL_LABELS.has(field.label)) {
+      return (
+        <span className="detail-value-text">
+          {renderEmphasizedText(value, `detail-${rank}-${index}`, highlightMatchers)}
+        </span>
+      );
+    }
+
+    const paragraphs = splitReadableParagraphs(value);
+    if (paragraphs.length <= 1) {
+      return (
+        <span className="detail-value-text">
+          {renderEmphasizedText(value, `detail-${rank}-${index}`, highlightMatchers)}
+        </span>
+      );
+    }
+
+    return (
+      <div className="detail-readable-block">
+        {paragraphs.map((paragraph, paragraphIndex) => (
+          <p key={`detail-${rank}-${index}-${paragraphIndex}`} className="detail-readable-line">
+            {renderEmphasizedText(
+              paragraph,
+              `detail-${rank}-${index}-${paragraphIndex}`,
+              highlightMatchers
+            )}
           </p>
         ))}
       </div>
@@ -356,14 +350,13 @@ function ProductCard({
       </div>
 
       <h4>{title}</h4>
-
       {typeof clickCount === "number" && typeof clickRatePercent === "number" ? (
         <p className="click-metric">클릭 {clickCount}회 · 클릭률 {clickRatePercent.toFixed(1)}%</p>
       ) : null}
 
-      {renderReadableBlock(summaryLines, `summary-${rank}`, "summary", false)}
-      {renderReadableBlock(metaLines, `meta-${rank}`, "meta", false)}
-      {renderReadableBlock(reasonPreviewLines, `reason-${rank}`, "reason", true)}
+      {renderReadableBlock(summaryParagraphs, "summary", `summary-${rank}`)}
+      {renderReadableBlock(metaParagraphs, "meta", `meta-${rank}`)}
+      {renderReadableBlock(reasonParagraphs, "reason", `reason-${rank}`)}
 
       <div className="card-actions">
         {hasDetails ? (

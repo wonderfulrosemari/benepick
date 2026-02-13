@@ -1731,15 +1731,7 @@ public class RecommendationService {
         int totalScore,
         String tieBreakRule
     ) {
-        String scoreLine = scoreParts.stream()
-            .map(part -> part.label() + "(" + formatSignedPoints(part.points()) + "점)")
-            .collect(Collectors.joining(", "));
-        if (scoreLine.isBlank()) {
-            scoreLine = "기본점수(" + totalScore + "점)";
-        }
-
         List<String> lines = new ArrayList<>();
-        lines.add("점수구성: " + scoreLine + " = " + totalScore + "점");
 
         String coreReasonLine = joinReasons(coreReasons, 6, " · ");
         if (!coreReasonLine.isBlank()) {

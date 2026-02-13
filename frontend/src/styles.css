@@ -344,37 +344,26 @@ select:focus {
 .summary,
 .meta,
 .reason {
-  margin: 9px 0 0;
+  margin: 7px 0 0;
   color: var(--muted);
   font-size: 0.9rem;
-  line-height: 1.65;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: keep-all;
+  overflow-wrap: anywhere;
 }
 
-.summary.multi,
-.meta.multi,
-.reason.multi {
+.summary.readable-block,
+.meta.readable-block,
+.reason.readable-block {
   display: grid;
   gap: 6px;
 }
 
-.text-line {
+.readable-line {
   margin: 0;
-  display: flex;
-  align-items: flex-start;
-  gap: 7px;
-  line-height: 1.65;
-}
-
-.text-line-bullet {
-  color: var(--brand-dark);
-  font-weight: 800;
-  line-height: 1.45;
-}
-
-.reason {
-  margin-top: 12px;
-  padding-top: 10px;
-  border-top: 1px dashed rgba(18, 36, 63, 0.18);
+  line-height: 1.6;
+  white-space: normal;
 }
 
 .click-metric {
@@ -543,16 +532,22 @@ select:focus {
   word-break: break-word;
 }
 
-.detail-paragraph-list {
+.detail-value-text {
+  white-space: pre-wrap;
+  word-break: keep-all;
+  overflow-wrap: anywhere;
+}
+
+.detail-readable-block {
   margin: 0;
-  padding: 0 0 0 16px;
   display: grid;
   gap: 4px;
 }
 
-.detail-paragraph-list li {
+.detail-readable-line {
   margin: 0;
   line-height: 1.5;
+  white-space: normal;
 }
 
 .detail-row dd a {
