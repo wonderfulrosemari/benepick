@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64" fill="none">
+  <defs>
+    <linearGradient id="g" x1="8" y1="8" x2="56" y2="56" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#EF4444"/>
+      <stop offset="1" stop-color="#DC2626"/>
+    </linearGradient>
+  </defs>
+  <rect x="4" y="4" width="56" height="56" rx="14" fill="url(#g)"/>
+  <rect x="20" y="18" width="4" height="24" rx="2" fill="white"/>
+  <rect x="28" y="18" width="4" height="24" rx="2" fill="white"/>
+  <rect x="36" y="18" width="8" height="24" rx="4" fill="white"/>
+  <text x="32" y="51" text-anchor="middle" font-size="10" font-family="Arial, sans-serif" font-weight="700" fill="white">DIN</text>
+</svg>

@@ -1,65 +1,53 @@
-# Benepick v0.1.0 Release Notes
+# Benepick Release Notes
 
-출시일: 2026-02-13  
-태그: `v0.1.0`
+## v0.1.0 (2026-02-13)
 
-## 주요 변경사항
+### 초기 릴리즈
 
-### 1) 백엔드 기능 확장 (Spring Boot)
-- 추천 실행 API 추가
-  - `POST /api/recommendations/simulate`
-  - `GET /api/recommendations/history`
-  - `GET /api/recommendations/{runId}`
-  - `GET /api/recommendations/{runId}/analytics`
-  - `POST /api/recommendations/{runId}/redirect`
-- 카탈로그 동기화 API 추가
-  - `GET /api/catalog/summary`
-  - `POST /api/catalog/sync/finlife`
-  - `POST /api/catalog/sync/cards/external`
-- 데이터 전략
-  - 계좌: 시드 + 금감원(금융상품한눈에) 동기화 데이터 혼합
-  - 카드: 시드 + 외부 JSON 소스 동기화 데이터 혼합
-- 인증 기본 구조 포함
-  - Google 로그인/JWT/Refresh 토큰 관련 엔드포인트 및 보안 설정 추가
+- 백엔드 추천/리다이렉트 API 구현
+- 카탈로그 동기화 API 구현
+- 추천 UI/결과 화면 구현
 
-### 2) 프론트엔드 기능 확장 (React + Vite + TypeScript)
-- 추천 입력 폼 및 결과 화면 구현
-- 추천 결과 저장 이력(최근 runId) UI 추가
-- 추천 클릭 분석(카테고리별 클릭률/전환률) 대시보드 UI 추가
-- 백엔드 API 연동 구조(`src/lib/api.ts`) 정리
+---
 
-### 3) 정리 작업
-- 프론트엔드 생성 산출물(`.tsbuildinfo`, 임시 d.ts/js) 제거
-- `.gitignore` 보완
+## v0.2.0 (2026-02-15)
 
-## 운영 설정 참고
+### 데이터/동기화
 
-- 필수 환경변수
-  - `DB_URL`
-  - `DB_USERNAME`
-  - `DB_PASSWORD`
-  - `JWT_SECRET`
-  - `GOOGLE_CLIENT_ID`
-- 선택 환경변수
-  - `FINLIFE_AUTH_KEY`
-  - `CARD_EXTERNAL_SOURCE_URL`
+- FinLife 계좌 동기화 + 공공데이터 카드 다중 소스 연동
+- 동기화 상태 API 추가
+  - 마지막 성공/실패 시각, 건수, 실패 사유
 
-## 알려진 제한사항 (v0.1.0)
-- 금감원 API 키 미설정 시 `sync/finlife` 호출은 `400` 반환
-- 클릭/전환 통계는 실제 redirect 이벤트가 발생해야 수치가 누적됨
-- Benepick은 추천 및 공식 사이트 이동까지 제공하며, 계좌 개설/발급 같은 은행 업무는 수행하지 않음
+### 추천 엔진
 
-## 포함 커밋
-- `692453d` feat(backend): add recommendation APIs and external catalog sync
-- `497c9fb` feat(frontend): add recommendation dashboard and history UI
-- `a3fa029` chore(frontend): remove generated TypeScript build artifacts
+- 계좌/카드 카테고리 신호 분리 반영
+  - `accountCategories`, `cardCategories`
+- 가중치 기반 점수 체계 정리 (환경변수 기반 튜닝)
+- 월 예상 이득(기대/최소/최대) 및 근거 컴포넌트 제공
 
-## 추가 변경 (2026-02-14)
-- 프론트 텍스트 가독성 개선
-  - 추천 카드의 요약/메타/추천근거를 문단 단위로 렌더링해 가독성을 개선
-  - `점수구성:` 라인을 화면에서 제거해 핵심근거 중심으로 표시
-- 필터 키워드 정리
-  - 계좌 우선순위 라벨 `금리/저축 중심` -> `금리/저축`으로 변경
-- 계좌 핵심 설명 보강
-  - FinLife 요약 생성 시 `specialCondition`이 축약(`...`)인 경우 `etcNote` 우선 사용
-  - 두 설명이 서로 다를 경우 병합해 정보 손실을 줄임
+### 프론트엔드 UX
+
+- 계좌/카드 입력 탭 분리
+- 필터 UI 아이콘 카드형 개선
+- 추천 카드 가독성 개선 (상세 텍스트/문단 렌더링)
+- 월 예상 이득 툴팁(호버) 제공
+- 공식 상품 페이지 이동 강화
+
+### 최소 기능 중심 UI 정리
+
+- 결과 불러오기/공유 패널 제거
+- 데이터 상태/동기화 패널 제거
+- 입력 화면의 대표 기준/반영 신호 텍스트 제거
+
+### 보안/운영
+
+- 로컬/서버 비밀키 파일 분리
+  - `backend/.env/secrets.local.properties`
+  - `backend/.env/secrets.server.properties`
+- 비밀키 파일 Git 제외 규칙 강화
+- 배포 설정 추가
+  - `render.yaml` (Render 백엔드)
+  - GitHub Pages Actions 워크플로우
+  - `DEPLOYMENT.md` 배포 가이드
+- 헬스체크 노출 (`/actuator/health`)
+

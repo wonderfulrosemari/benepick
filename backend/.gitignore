@@ -10,3 +10,7 @@ config/secrets-*.properties
 
 config/product-url-overrides.properties
 config/product-url-overrides-local.properties
+
+# runtime secrets (local/server)
+.env/*.properties
+!.env/*.example.properties

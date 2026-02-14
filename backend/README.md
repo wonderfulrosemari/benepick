@@ -8,26 +8,37 @@ Spring Boot 기반 백엔드입니다.
 ./gradlew bootRun
 ```
 
-## 로컬 비밀키 파일(권장)
+## 비밀키 운영 분리 (로컬/서버)
 
-`backend/src/main/resources/application.yml`에서 아래 파일을 자동 로드하도록 설정했습니다.
+애플리케이션은 아래 파일을 순서대로 자동 로드합니다.
 
-- `backend/config/secrets.properties`
-- `backend/config/secrets-local.properties`
+- `backend/.env/secrets.local.properties`
+- `backend/.env/secrets.server.properties`
+- (하위 호환) `backend/config/secrets.properties`
+- (하위 호환) `backend/config/secrets-local.properties`
 
-실행 절차:
+로컬 개발:
 
 ```bash
 cd backend
-cp config/secrets.example.properties config/secrets.properties
-# secrets.properties에 실제 키 입력
+cp .env/secrets.local.example.properties .env/secrets.local.properties
+# .env/secrets.local.properties 에 실제 키 입력
+./gradlew bootRun
+```
+
+서버 운영:
+
+```bash
+cd backend
+cp .env/secrets.server.example.properties .env/secrets.server.properties
+# 서버 값으로 수정 후 실행
 ./gradlew bootRun
 ```
 
 주의:
-- `config/secrets.properties`는 `.gitignore`로 제외되어 Git에 올라가지 않습니다.
-- `config/product-url-overrides.properties`도 `.gitignore`로 제외되어 로컬 URL 매핑을 안전하게 관리할 수 있습니다.
-- IntelliJ Run Configuration 환경변수를 계속 써도 되지만, 배포/운영은 Secret Manager 또는 서버 환경변수로 관리하는 것을 권장합니다.
+- `backend/.env/*.properties` 는 `.gitignore`로 제외되어 Git에 올라가지 않습니다.
+- 예시 파일(`*.example.properties`)만 Git에 포함됩니다.
+- 배포 환경에서는 가능하면 파일 대신 Secret Manager/환경변수 주입 방식을 권장합니다.
 
 ## 필수 환경 변수
 

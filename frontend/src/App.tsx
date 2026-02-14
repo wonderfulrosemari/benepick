@@ -1,11 +1,18 @@
 import { useEffect, useMemo, useState } from 'react';
+import accountFilterSavingsIcon from './assets/account-filter/savings.svg';
+import accountFilterSalaryIcon from './assets/account-filter/salary.svg';
+import accountFilterStarterIcon from './assets/account-filter/starter.svg';
+import accountFilterTravelIcon from './assets/account-filter/travel.svg';
+import accountFilterCashbackIcon from './assets/account-filter/cashback.svg';
+import cardFilterOnlineIcon from './assets/card-filter/online.svg';
+import cardFilterGroceryIcon from './assets/card-filter/grocery.svg';
+import cardFilterTransportIcon from './assets/card-filter/transport.svg';
+import cardFilterDiningIcon from './assets/card-filter/dining.svg';
+import cardFilterCafeIcon from './assets/card-filter/cafe.svg';
+import cardFilterSubscriptionIcon from './assets/card-filter/subscription.svg';
 import ProductCard from './components/ProductCard';
 import {
-    getCatalogSummary,
-    getCatalogSyncStatus,
     getRecommendationAnalytics,
-    syncCatalogCardsExternal,
-    syncCatalogFinlife,
     getRecommendationRun,
     redirectRecommendation,
     simulateRecommendations,
@@ -13,8 +20,6 @@ import {
 import {
     AccountPriority,
     CardPriority,
-    CatalogSummaryResponse,
-    CatalogSyncStatusResponse,
     Priority,
     RecommendationAnalyticsResponse,
     RecommendationItem,
@@ -23,20 +28,20 @@ import {
 } from './types/recommendation';
 
 const accountCategoryOptions = [
-    { key: 'savings', label: '저축/금리' },
-    { key: 'salary', label: '급여/주거래' },
-    { key: 'starter', label: '초보/간편' },
-    { key: 'travel', label: '외화/해외' },
-    { key: 'cashback', label: '생활비 관리' },
+    { key: 'savings', label: '저축/금리', icon: accountFilterSavingsIcon },
+    { key: 'salary', label: '급여/주거래', icon: accountFilterSalaryIcon },
+    { key: 'starter', label: '초보/간편', icon: accountFilterStarterIcon },
+    { key: 'travel', label: '외화/해외', icon: accountFilterTravelIcon },
+    { key: 'cashback', label: '생활비 관리', icon: accountFilterCashbackIcon },
 ];
 
 const cardCategoryOptions = [
-    { key: 'online', label: '온라인쇼핑' },
-    { key: 'grocery', label: '장보기/마트' },
-    { key: 'transport', label: '교통' },
-    { key: 'dining', label: '외식' },
-    { key: 'cafe', label: '카페' },
-    { key: 'subscription', label: '구독' },
+    { key: 'online', label: '온라인쇼핑', icon: cardFilterOnlineIcon },
+    { key: 'grocery', label: '장보기/마트', icon: cardFilterGroceryIcon },
+    { key: 'transport', label: '교통', icon: cardFilterTransportIcon },
+    { key: 'dining', label: '외식', icon: cardFilterDiningIcon },
+    { key: 'cafe', label: '카페', icon: cardFilterCafeIcon },
+    { key: 'subscription', label: '구독', icon: cardFilterSubscriptionIcon },
 ];
 
 const accountPriorityLabel: Record<AccountPriority, string> = {
@@ -47,6 +52,8 @@ const accountPriorityLabel: Record<AccountPriority, string> = {
     cashback: '생활비 관리',
 };
 
+const accountPriorityOrder: AccountPriority[] = ['savings', 'salary', 'starter', 'travel', 'cashback'];
+
 const cardPriorityLabel: Record<CardPriority, string> = {
     cashback: '생활 할인/캐시백',
     annualfee: '연회비 절감',
@@ -55,11 +62,64 @@ const cardPriorityLabel: Record<CardPriority, string> = {
     savings: '고정비 절감',
 };
 
+const accountTermOptions = [
+    { key: 'short', label: '단기 유동성 (6개월 이하)' },
+    { key: 'middle', label: '중기 균형 (6~12개월)' },
+    { key: 'long', label: '장기 저축 (1년 이상)' },
+] as const;
+
+const accountConditionOptions = [
+    { key: 'simple', label: '간단한 조건 선호' },
+    { key: 'balanced', label: '보통 수준 조건 허용' },
+    { key: 'active', label: '우대조건 적극 충족 가능' },
+] as const;
+
+const cardAnnualFeeBudgetOptions = [
+    { key: 'free', label: '연회비 없음만' },
+    { key: 'under10k', label: '1만원 이하' },
+    { key: 'under20k', label: '2만원 이하' },
+    { key: 'flexible', label: '연회비보다 혜택 우선' },
+] as const;
+
+const cardPerformanceOptions = [
+    { key: 'light', label: '전월실적 낮게' },
+    { key: 'balanced', label: '전월실적 보통' },
+    { key: 'high', label: '전월실적 높아도 가능' },
+] as const;
+
 const splitKoreanKeywords = (value: string): string[] =>
     value
         .split(/[\s/(),·]+/)
         .map((token) => token.trim())
         .filter((token) => token.length >= 2);
+
+const dedupe = (values: string[]) => Array.from(new Set(values));
+
+const accountWeightHints = {
+    accountTerm:
+        '운용 기간 선호는 계좌 신호를 보정합니다. 단기: starter/daily 강화, 장기: savings 강화',
+    accountCondition:
+        '우대조건 감수 수준은 조건 난이도 반영입니다. simple: starter 강화, active: savings/salary 강화',
+    salaryTransfer:
+        '급여이체 가능 선택 시 급여이체 신호가 있는 계좌에 +30점 보너스가 반영됩니다.',
+    travelLevel:
+        '해외 이용 빈도가 있을 때 travel/global 신호가 있는 계좌/카드에 추가 가점이 반영됩니다.',
+    accountFilter:
+        '계좌 필터 일치 신호는 항목별 +6점(기본 프로필)으로 누적 반영됩니다.',
+} as const;
+
+const cardWeightHints = {
+    cardPriority:
+        '카드 우선순위 가중치(기본 프로필): 생활할인 +24점, 연회비 절감 +26점, 여행/해외 +22점, 초보/저비용 +24점, 고정비 절감 +14점',
+    annualFeeBudget:
+        '연회비 허용 범위가 엄격하면 연회비 절감 우선순위로 고정됩니다. 저연회비 +8점, 고연회비 상품은 -6점 패널티(기본).',
+    performance:
+        '월 사용액/전월실적 달성 가능성이 높으면 +10점(기본 프로필) 가점이 반영됩니다.',
+    travelLevel:
+        '해외 결제 사용 빈도가 높으면 여행/해외 신호 카드에 +28점(기본 프로필) 가점이 반영됩니다.',
+    cardFilter:
+        '카드 필터 카테고리 일치 수만큼 항목당 +9점(기본 프로필)이 누적 반영됩니다.',
+} as const;
 
 const toLegacyPriority = (accountPriority: AccountPriority, cardPriority: CardPriority): Priority => {
     if (cardPriority === 'annualfee') {
@@ -87,105 +147,44 @@ const initialProfile: SimulateRecommendationRequest = {
 };
 
 type ProductTab = 'account' | 'card';
+type AccountTermPreference = (typeof accountTermOptions)[number]['key'];
+type AccountConditionPreference = (typeof accountConditionOptions)[number]['key'];
+type CardAnnualFeeBudget = (typeof cardAnnualFeeBudgetOptions)[number]['key'];
+type CardPerformancePreference = (typeof cardPerformanceOptions)[number]['key'];
+
+type FieldHintProps = {
+    message: string;
+};
+
+const FieldHint = ({ message }: FieldHintProps) => (
+    <span className="field-hint" tabIndex={0} role="button" aria-label="점수 반영 안내">
+        ?
+        <span className="field-hint-popup">{message}</span>
+    </span>
+);
 
 function App() {
     const [profile, setProfile] = useState<SimulateRecommendationRequest>(initialProfile);
     const [activeTab, setActiveTab] = useState<ProductTab>('account');
-    const [annualFeeFirst, setAnnualFeeFirst] = useState(false);
     const [accountFilters, setAccountFilters] = useState<string[]>(['savings', 'salary']);
     const [cardFilters, setCardFilters] = useState<string[]>(['online', 'grocery', 'subscription']);
+    const [accountTermPreference, setAccountTermPreference] = useState<AccountTermPreference>('middle');
+    const [accountConditionPreference, setAccountConditionPreference] = useState<AccountConditionPreference>('balanced');
+    const [cardAnnualFeeBudget, setCardAnnualFeeBudget] = useState<CardAnnualFeeBudget>('under10k');
+    const [cardPerformancePreference, setCardPerformancePreference] = useState<CardPerformancePreference>('balanced');
     const [result, setResult] = useState<RecommendationRunResponse | null>(null);
     const [analytics, setAnalytics] = useState<RecommendationAnalyticsResponse | null>(null);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [redirectingKey, setRedirectingKey] = useState<string | null>(null);
-    const [runLookupId, setRunLookupId] = useState('');
-    const [loadingRun, setLoadingRun] = useState(false);
-    const [catalogSummary, setCatalogSummary] = useState<CatalogSummaryResponse | null>(null);
-    const [catalogSyncStatus, setCatalogSyncStatus] = useState<CatalogSyncStatusResponse | null>(null);
-    const [catalogLoading, setCatalogLoading] = useState(false);
-    const [catalogSyncLoading, setCatalogSyncLoading] = useState(false);
-    const [syncingTarget, setSyncingTarget] = useState<"finlife" | "cards" | null>(null);
-    const [copied, setCopied] = useState(false);
 
-    const effectiveCardPriority = annualFeeFirst ? 'annualfee' : profile.cardPriority;
-
-    const formatDateTime = (value?: string | null) => {
-        if (!value) {
-            return '-';
-        }
-        const date = new Date(value);
-        if (Number.isNaN(date.getTime())) {
-            return '-';
-        }
-        return date.toLocaleString('ko-KR');
-    };
-
-    const statusLabel = (result?: string) => {
-        if (result === 'SUCCESS') {
-            return '성공';
-        }
-        if (result === 'FAILED') {
-            return '실패';
-        }
-        return '대기';
-    };
-
-    const runShareUrl = useMemo(() => {
-        if (!result) {
-            return '';
-        }
-
-        const url = new URL(window.location.href);
-        url.searchParams.set('runId', result.runId);
-        return url.toString();
-    }, [result]);
+    const annualFeeFirst = cardAnnualFeeBudget === 'free' || cardAnnualFeeBudget === 'under10k';
+    const effectiveCardPriority = profile.cardPriority;
 
     const writeRunIdToUrl = (runId: string) => {
         const url = new URL(window.location.href);
         url.searchParams.set('runId', runId);
         window.history.replaceState({}, '', url.toString());
-    };
-
-    const loadCatalog = async () => {
-        setCatalogLoading(true);
-        try {
-            const summary = await getCatalogSummary();
-            setCatalogSummary(summary);
-        } catch {
-            // keep UI usable even if summary fails
-        } finally {
-            setCatalogLoading(false);
-        }
-    };
-
-    const loadCatalogSyncStatus = async () => {
-        setCatalogSyncLoading(true);
-        try {
-            const status = await getCatalogSyncStatus();
-            setCatalogSyncStatus(status);
-        } catch {
-            setCatalogSyncStatus(null);
-        } finally {
-            setCatalogSyncLoading(false);
-        }
-    };
-
-    const runCatalogSync = async (target: "finlife" | "cards") => {
-        setSyncingTarget(target);
-        setError(null);
-        try {
-            if (target === "finlife") {
-                await syncCatalogFinlife();
-            } else {
-                await syncCatalogCardsExternal();
-            }
-            await Promise.all([loadCatalog(), loadCatalogSyncStatus()]);
-        } catch (e) {
-            setError(e instanceof Error ? e.message : "동기화 요청에 실패했습니다.");
-        } finally {
-            setSyncingTarget(null);
-        }
     };
 
     const loadAnalytics = async (runId: string) => {
@@ -202,30 +201,20 @@ function App() {
         if (!normalizedRunId) {
             return;
         }
-
-        setLoadingRun(true);
         setError(null);
 
         try {
             const response = await getRecommendationRun(normalizedRunId);
             setResult(response);
-            setRunLookupId(response.runId);
             writeRunIdToUrl(response.runId);
             await loadAnalytics(response.runId);
         } catch (e) {
             setError(e instanceof Error ? e.message : '추천 결과 조회에 실패했습니다.');
-        } finally {
-            setLoadingRun(false);
         }
     };
-
     useEffect(() => {
-        void loadCatalog();
-        void loadCatalogSyncStatus();
-
         const initialRunId = new URLSearchParams(window.location.search).get('runId');
         if (initialRunId) {
-            setRunLookupId(initialRunId);
             void loadRun(initialRunId);
         }
     }, []);
@@ -236,17 +225,17 @@ function App() {
         setError(null);
 
         try {
-            const mergedCategories = Array.from(new Set([...accountFilters, ...cardFilters]));
+            const mergedCategories = dedupe([...effectiveAccountCategories, ...effectiveCardCategories]);
             const response = await simulateRecommendations({
                 ...profile,
+                accountPriority: effectiveAccountPriority,
                 cardPriority: effectiveCardPriority,
-                priority: toLegacyPriority(profile.accountPriority, effectiveCardPriority),
+                priority: toLegacyPriority(effectiveAccountPriority, effectiveCardPriority),
                 categories: mergedCategories,
-                accountCategories: accountFilters,
-                cardCategories: cardFilters,
+                accountCategories: effectiveAccountCategories,
+                cardCategories: effectiveCardCategories,
             });
             setResult(response);
-            setRunLookupId(response.runId);
             writeRunIdToUrl(response.runId);
             await loadAnalytics(response.runId);
         } catch (e) {
@@ -268,6 +257,65 @@ function App() {
         );
     };
 
+    const effectiveAccountCategories = useMemo(() => {
+        const categories = [...accountFilters];
+        if (accountTermPreference === 'long') {
+            categories.push('savings');
+        } else if (accountTermPreference === 'short') {
+            categories.push('starter', 'daily');
+        }
+
+        if (accountConditionPreference === 'simple') {
+            categories.push('starter');
+        } else if (accountConditionPreference === 'active') {
+            categories.push('savings', 'salary');
+        }
+
+        if (profile.travelLevel !== 'none') {
+            categories.push('travel');
+        }
+
+        return dedupe(categories);
+    }, [accountFilters, accountTermPreference, accountConditionPreference, profile.travelLevel]);
+
+    const effectiveAccountPriority = useMemo<AccountPriority>(() => {
+        for (const key of accountFilters) {
+            if (accountPriorityOrder.includes(key as AccountPriority)) {
+                return key as AccountPriority;
+            }
+        }
+
+        for (const key of accountPriorityOrder) {
+            if (effectiveAccountCategories.includes(key)) {
+                return key;
+            }
+        }
+
+        return 'savings';
+    }, [accountFilters, effectiveAccountCategories]);
+
+    const effectiveCardCategories = useMemo(() => {
+        const categories = [...cardFilters];
+
+        if (cardAnnualFeeBudget === 'free' || cardAnnualFeeBudget === 'under10k') {
+            categories.push('starter');
+        } else if (cardAnnualFeeBudget === 'under20k') {
+            categories.push('daily');
+        }
+
+        if (cardPerformancePreference === 'light') {
+            categories.push('starter');
+        } else if (cardPerformancePreference === 'high') {
+            categories.push('savings');
+        }
+
+        if (profile.travelLevel !== 'none') {
+            categories.push('travel');
+        }
+
+        return dedupe(categories);
+    }, [cardFilters, cardAnnualFeeBudget, cardPerformancePreference, profile.travelLevel]);
+
     const handleRedirect = async (item: RecommendationItem) => {
         if (!result) {
             return;
@@ -288,20 +336,6 @@ function App() {
         }
     };
 
-    const copyShareUrl = async () => {
-        if (!runShareUrl) {
-            return;
-        }
-
-        try {
-            await navigator.clipboard.writeText(runShareUrl);
-            setCopied(true);
-            window.setTimeout(() => setCopied(false), 1600);
-        } catch {
-            setError('클립보드 복사에 실패했습니다. 주소창 URL을 직접 복사해 주세요.');
-        }
-    };
-
     const resolveActionLabel = (item: RecommendationItem) => {
         if (item.productType === 'ACCOUNT') {
             return '공식 계좌 페이지 이동';
@@ -310,29 +344,32 @@ function App() {
         return '공식 카드 페이지 이동';
     };
 
-    const dataStatusLabel = catalogSummary
-        ? catalogSummary.finlifeAccounts > 0
-            ? '실데이터 일부 동기화됨'
-            : '현재 시드 데이터 사용 중'
-        : '데이터 상태 확인 중';
-
-    const finlifeStatus = catalogSyncStatus?.finlife;
-    const cardsStatus = catalogSyncStatus?.cards;
-
     const highlightKeywords = useMemo(() => {
         const selectedAccountLabels = accountCategoryOptions
-            .filter((category) => accountFilters.includes(category.key))
+            .filter((category) => effectiveAccountCategories.includes(category.key))
             .map((category) => category.label);
 
         const selectedCardLabels = cardCategoryOptions
-            .filter((category) => cardFilters.includes(category.key))
+            .filter((category) => effectiveCardCategories.includes(category.key))
             .map((category) => category.label);
+
+        const termLabel = accountTermOptions.find((option) => option.key === accountTermPreference)?.label ?? '';
+        const conditionLabel =
+            accountConditionOptions.find((option) => option.key === accountConditionPreference)?.label ?? '';
+        const annualFeeLabel =
+            cardAnnualFeeBudgetOptions.find((option) => option.key === cardAnnualFeeBudget)?.label ?? '';
+        const performanceLabel =
+            cardPerformanceOptions.find((option) => option.key === cardPerformancePreference)?.label ?? '';
 
         const rawKeywords = [
             ...selectedAccountLabels,
             ...selectedCardLabels,
-            accountPriorityLabel[profile.accountPriority],
+            accountPriorityLabel[effectiveAccountPriority],
             cardPriorityLabel[effectiveCardPriority],
+            termLabel,
+            conditionLabel,
+            annualFeeLabel,
+            performanceLabel,
             annualFeeFirst ? '연회비' : '',
         ];
 
@@ -346,13 +383,17 @@ function App() {
 
         return Array.from(new Set(rawKeywords.flatMap(splitKoreanKeywords)));
     }, [
-        accountFilters,
-        cardFilters,
-        profile.accountPriority,
+        effectiveAccountCategories,
+        effectiveCardCategories,
+        effectiveAccountPriority,
         effectiveCardPriority,
         annualFeeFirst,
         profile.salaryTransfer,
         profile.travelLevel,
+        accountTermPreference,
+        accountConditionPreference,
+        cardAnnualFeeBudget,
+        cardPerformancePreference,
     ]);
 
     const clickStatsByProduct = useMemo(() => {
@@ -415,6 +456,12 @@ function App() {
                         </div>
 
                         <form className="form-grid" onSubmit={onSubmit}>
+                            <div className="input-pattern-note">
+                                데이터 기반 입력 패턴: <strong>연회비 한도</strong>, <strong>전월실적 부담</strong>,
+                                <strong> 혜택 카테고리</strong>를 먼저 입력하고,
+                                계좌는 <strong>우대조건 달성 가능성</strong>과 <strong>기간 목적</strong>을 함께 반영합니다.
+                            </div>
+
                             {activeTab === 'account' ? (
                                 <>
                                     <label>
@@ -461,28 +508,48 @@ function App() {
                                     </label>
 
                                     <label>
-                                        계좌 추천 기준
+                                        <span className="label-title">
+                                            운용 기간 선호
+                                            <FieldHint message={accountWeightHints.accountTerm} />
+                                        </span>
                                         <select
-                                            value={profile.accountPriority}
-                                            onChange={(e) => {
-                                                const accountPriority = e.target.value as AccountPriority;
-                                                setProfile((prev) => ({
-                                                    ...prev,
-                                                    accountPriority,
-                                                    priority: toLegacyPriority(accountPriority, effectiveCardPriority),
-                                                }));
-                                            }}
+                                            value={accountTermPreference}
+                                            onChange={(e) =>
+                                                setAccountTermPreference(e.target.value as AccountTermPreference)
+                                            }
                                         >
-                                            {Object.entries(accountPriorityLabel).map(([key, value]) => (
-                                                <option key={key} value={key}>
-                                                    {value}
+                                            {accountTermOptions.map((option) => (
+                                                <option key={option.key} value={option.key}>
+                                                    {option.label}
                                                 </option>
                                             ))}
                                         </select>
                                     </label>
 
                                     <label>
-                                        급여이체 가능 여부
+                                        <span className="label-title">
+                                            우대조건 감수 수준
+                                            <FieldHint message={accountWeightHints.accountCondition} />
+                                        </span>
+                                        <select
+                                            value={accountConditionPreference}
+                                            onChange={(e) =>
+                                                setAccountConditionPreference(e.target.value as AccountConditionPreference)
+                                            }
+                                        >
+                                            {accountConditionOptions.map((option) => (
+                                                <option key={option.key} value={option.key}>
+                                                    {option.label}
+                                                </option>
+                                            ))}
+                                        </select>
+                                    </label>
+
+                                    <label>
+                                        <span className="label-title">
+                                            급여이체 가능 여부
+                                            <FieldHint message={accountWeightHints.salaryTransfer} />
+                                        </span>
                                         <select
                                             value={profile.salaryTransfer}
                                             onChange={(e) =>
@@ -498,19 +565,55 @@ function App() {
                                         </select>
                                     </label>
 
+                                    <label>
+                                        <span className="label-title">
+                                            해외 이용 빈도
+                                            <FieldHint message={accountWeightHints.travelLevel} />
+                                        </span>
+                                        <select
+                                            value={profile.travelLevel}
+                                            onChange={(e) =>
+                                                setProfile((prev) => ({
+                                                    ...prev,
+                                                    travelLevel: e.target
+                                                        .value as SimulateRecommendationRequest['travelLevel'],
+                                                }))
+                                            }
+                                        >
+                                            <option value="none">거의 없음</option>
+                                            <option value="sometimes">가끔</option>
+                                            <option value="often">자주</option>
+                                        </select>
+                                    </label>
+
                                     <fieldset className="category-group category-group-account">
-                                        <legend>계좌 필터 (계좌 전용)</legend>
-                                        <p className="category-help">저축/주거래/해외 등 계좌 추천에만 반영됩니다.</p>
-                                        {accountCategoryOptions.map((category) => (
-                                            <label key={category.key}>
-                                                <input
-                                                    type="checkbox"
-                                                    checked={accountFilters.includes(category.key)}
-                                                    onChange={() => toggleAccountFilter(category.key)}
-                                                />
-                                                {category.label}
-                                            </label>
-                                        ))}
+                                        <legend>
+                                            계좌 필터 (상품 성격)
+                                            <FieldHint message={accountWeightHints.accountFilter} />
+                                        </legend>
+                                        <p className="category-help">
+                                            계좌 필터를 카드형으로 선택하면 해당 성격이 점수에 직접 반영됩니다.
+                                        </p>
+                                        <div className="card-filter-grid">
+                                            {accountCategoryOptions.map((category) => (
+                                                <label key={category.key} className="card-filter-option">
+                                                    <input
+                                                        type="checkbox"
+                                                        checked={accountFilters.includes(category.key)}
+                                                        onChange={() => toggleAccountFilter(category.key)}
+                                                    />
+                                                    <span className="card-filter-option-content">
+                                                        <img
+                                                            src={category.icon}
+                                                            alt=""
+                                                            aria-hidden="true"
+                                                            className="card-filter-icon"
+                                                        />
+                                                        <span className="card-filter-label">{category.label}</span>
+                                                    </span>
+                                                </label>
+                                            ))}
+                                        </div>
                                     </fieldset>
                                 </>
                             ) : (
@@ -546,7 +649,10 @@ function App() {
                                     </label>
 
                                     <label>
-                                        카드 추천 기준
+                                        <span className="label-title">
+                                            카드 추천 기준
+                                            <FieldHint message={cardWeightHints.cardPriority} />
+                                        </span>
                                         <select
                                             value={profile.cardPriority}
                                             onChange={(e) => {
@@ -554,10 +660,9 @@ function App() {
                                                 setProfile((prev) => ({
                                                     ...prev,
                                                     cardPriority,
-                                                    priority: toLegacyPriority(prev.accountPriority, cardPriority),
+                                                    priority: toLegacyPriority(effectiveAccountPriority, cardPriority),
                                                 }));
                                             }}
-                                            disabled={annualFeeFirst}
                                         >
                                             {Object.entries(cardPriorityLabel).map(([key, value]) => (
                                                 <option key={key} value={key}>
@@ -568,18 +673,48 @@ function App() {
                                     </label>
 
                                     <label>
-                                        연회비 우선도
+                                        <span className="label-title">
+                                            연회비 허용 범위
+                                            <FieldHint message={cardWeightHints.annualFeeBudget} />
+                                        </span>
                                         <select
-                                            value={annualFeeFirst ? 'high' : 'normal'}
-                                            onChange={(e) => setAnnualFeeFirst(e.target.value === 'high')}
+                                            value={cardAnnualFeeBudget}
+                                            onChange={(e) =>
+                                                setCardAnnualFeeBudget(e.target.value as CardAnnualFeeBudget)
+                                            }
                                         >
-                                            <option value="normal">일반</option>
-                                            <option value="high">높음 (연회비 절감 우선)</option>
+                                            {cardAnnualFeeBudgetOptions.map((option) => (
+                                                <option key={option.key} value={option.key}>
+                                                    {option.label}
+                                                </option>
+                                            ))}
                                         </select>
                                     </label>
 
                                     <label>
-                                        해외 결제 사용 빈도
+                                        <span className="label-title">
+                                            전월실적 달성 자신도
+                                            <FieldHint message={cardWeightHints.performance} />
+                                        </span>
+                                        <select
+                                            value={cardPerformancePreference}
+                                            onChange={(e) =>
+                                                setCardPerformancePreference(e.target.value as CardPerformancePreference)
+                                            }
+                                        >
+                                            {cardPerformanceOptions.map((option) => (
+                                                <option key={option.key} value={option.key}>
+                                                    {option.label}
+                                                </option>
+                                            ))}
+                                        </select>
+                                    </label>
+
+                                    <label>
+                                        <span className="label-title">
+                                            해외 결제 사용 빈도
+                                            <FieldHint message={cardWeightHints.travelLevel} />
+                                        </span>
                                         <select
                                             value={profile.travelLevel}
                                             onChange={(e) =>
@@ -597,18 +732,33 @@ function App() {
                                     </label>
 
                                     <fieldset className="category-group category-group-card">
-                                        <legend>카드 필터 (카드 전용)</legend>
-                                        <p className="category-help">소비 카테고리 일치 점수는 카드 추천에만 반영됩니다.</p>
-                                        {cardCategoryOptions.map((category) => (
-                                            <label key={category.key}>
-                                                <input
-                                                    type="checkbox"
-                                                    checked={cardFilters.includes(category.key)}
-                                                    onChange={() => toggleCardFilter(category.key)}
-                                                />
-                                                {category.label}
-                                            </label>
-                                        ))}
+                                        <legend>
+                                            카드 필터 (혜택 카테고리)
+                                            <FieldHint message={cardWeightHints.cardFilter} />
+                                        </legend>
+                                        <p className="category-help">
+                                            혜택 카테고리 + 연회비 + 실적 난이도를 결합해 개인화 점수를 계산합니다.
+                                        </p>
+                                        <div className="card-filter-grid">
+                                            {cardCategoryOptions.map((category) => (
+                                                <label key={category.key} className="card-filter-option">
+                                                    <input
+                                                        type="checkbox"
+                                                        checked={cardFilters.includes(category.key)}
+                                                        onChange={() => toggleCardFilter(category.key)}
+                                                    />
+                                                    <span className="card-filter-option-content">
+                                                        <img
+                                                            src={category.icon}
+                                                            alt=""
+                                                            aria-hidden="true"
+                                                            className="card-filter-icon"
+                                                        />
+                                                        <span className="card-filter-label">{category.label}</span>
+                                                    </span>
+                                                </label>
+                                            ))}
+                                        </div>
                                     </fieldset>
                                 </>
                             )}
@@ -621,43 +771,6 @@ function App() {
 
                     <section className="results fade-in delay-2">
                         {error ? <p className="error-banner">{error}</p> : null}
-                        <div className="panel run-tools">
-                            <h3>결과 불러오기 / 공유</h3>
-                            <form
-                                className="inline-form"
-                                onSubmit={(event) => {
-                                    event.preventDefault();
-                                    void loadRun(runLookupId);
-                                }}
-                            >
-                                <input
-                                    type="text"
-                                    placeholder="runId 입력 후 이전 결과 불러오기"
-                                    value={runLookupId}
-                                    onChange={(event) => setRunLookupId(event.target.value)}
-                                />
-                                <button
-                                    type="submit"
-                                    className="ghost-button"
-                                    disabled={loadingRun || !runLookupId.trim()}
-                                >
-                                    {loadingRun ? '불러오는 중...' : '결과 불러오기'}
-                                </button>
-                            </form>
-
-                            {result ? (
-                                <div className="share-row">
-                                    <p>
-                                        현재 runId: <code>{result.runId}</code>
-                                    </p>
-                                    <button type="button" className="ghost-button" onClick={() => void copyShareUrl()}>
-                                        공유 링크 복사
-                                    </button>
-                                    {copied ? <span className="copy-note">복사됨</span> : null}
-                                </div>
-                            ) : null}
-                        </div>
-
                         {!result ? (
                             <div className="empty-state panel">추천 계산을 실행하면 결과가 표시됩니다.</div>
                         ) : (
@@ -729,106 +842,6 @@ function App() {
                         )}
                     </section>
                 </div>
-
-                <section className="panel status-strip fade-in delay-2 bottom-status">
-                    <p className="status-title">데이터 상태</p>
-                    <p className="status-value">{dataStatusLabel}</p>
-                    <p className="status-meta">
-                        계좌 {catalogSummary?.totalAccounts ?? '-'}개 · 실데이터 계좌{' '}
-                        {catalogSummary?.finlifeAccounts ?? '-'}개 · 카드 {catalogSummary?.totalCards ?? '-'}개 · 외부
-                        카드 {catalogSummary?.externalCards ?? '-'}개
-                    </p>
-
-                    <p className="sync-generated">
-                        동기화 상태 시각: {catalogSyncStatus ? formatDateTime(catalogSyncStatus.generatedAt) : '-'}
-                    </p>
-
-                    <div className="status-actions">
-                        <button
-                            type="button"
-                            className="ghost-button"
-                            onClick={() => {
-                                void loadCatalog();
-                                void loadCatalogSyncStatus();
-                            }}
-                            disabled={catalogLoading || catalogSyncLoading || syncingTarget !== null}
-                        >
-                            {catalogLoading || catalogSyncLoading ? '갱신 중...' : '상태 다시 확인'}
-                        </button>
-                        <button
-                            type="button"
-                            className="ghost-button"
-                            onClick={() => void runCatalogSync('finlife')}
-                            disabled={syncingTarget !== null}
-                        >
-                            {syncingTarget === 'finlife' ? '계좌 동기화 중...' : '계좌 실데이터 동기화'}
-                        </button>
-                        <button
-                            type="button"
-                            className="ghost-button"
-                            onClick={() => void runCatalogSync('cards')}
-                            disabled={syncingTarget !== null}
-                        >
-                            {syncingTarget === 'cards' ? '카드 동기화 중...' : '카드 실데이터 동기화'}
-                        </button>
-                    </div>
-
-                    <div className="sync-status-grid">
-                        <article className="sync-status-card">
-                            <div className="sync-status-head">
-                                <p className="sync-card-title">계좌(FinLife)</p>
-                                <span
-                                    className={`sync-pill ${
-                                        finlifeStatus?.lastResult === 'SUCCESS'
-                                            ? 'is-success'
-                                            : finlifeStatus?.lastResult === 'FAILED'
-                                              ? 'is-failed'
-                                              : ''
-                                    }`}
-                                >
-                                    {statusLabel(finlifeStatus?.lastResult)}
-                                </span>
-                            </div>
-                            <p className="sync-card-meta">
-                                마지막 실행: {formatDateTime(finlifeStatus?.lastRunAt)} · 마지막 성공:{' '}
-                                {formatDateTime(finlifeStatus?.lastSuccessAt)}
-                            </p>
-                            <p className="sync-card-meta">
-                                가져옴/저장/비활성/건너뜀: {finlifeStatus?.lastFetched ?? '-'} /{' '}
-                                {finlifeStatus?.lastUpserted ?? '-'} / {finlifeStatus?.lastDeactivated ?? '-'} /{' '}
-                                {finlifeStatus?.lastSkipped ?? '-'}
-                            </p>
-                            <p className="sync-card-message">{finlifeStatus?.lastMessage || '-'}</p>
-                        </article>
-
-                        <article className="sync-status-card">
-                            <div className="sync-status-head">
-                                <p className="sync-card-title">카드(외부/공공)</p>
-                                <span
-                                    className={`sync-pill ${
-                                        cardsStatus?.lastResult === 'SUCCESS'
-                                            ? 'is-success'
-                                            : cardsStatus?.lastResult === 'FAILED'
-                                              ? 'is-failed'
-                                              : ''
-                                    }`}
-                                >
-                                    {statusLabel(cardsStatus?.lastResult)}
-                                </span>
-                            </div>
-                            <p className="sync-card-meta">
-                                마지막 실행: {formatDateTime(cardsStatus?.lastRunAt)} · 마지막 성공:{' '}
-                                {formatDateTime(cardsStatus?.lastSuccessAt)}
-                            </p>
-                            <p className="sync-card-meta">
-                                가져옴/저장/비활성/건너뜀: {cardsStatus?.lastFetched ?? '-'} /{' '}
-                                {cardsStatus?.lastUpserted ?? '-'} / {cardsStatus?.lastDeactivated ?? '-'} /{' '}
-                                {cardsStatus?.lastSkipped ?? '-'}
-                            </p>
-                            <p className="sync-card-message">{cardsStatus?.lastMessage || '-'}</p>
-                        </article>
-                    </div>
-                </section>
             </main>
 
             <footer className="site-footer">

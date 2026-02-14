@@ -1,0 +1,46 @@
+services:
+  - type: web
+    name: benepick-backend
+    env: java
+    rootDir: backend
+    plan: free
+    region: singapore
+    buildCommand: ./gradlew clean bootJar -x test
+    startCommand: java -jar build/libs/*.jar
+    healthCheckPath: /actuator/health
+    autoDeploy: true
+    envVars:
+      - key: JAVA_VERSION
+        value: 17
+      - key: PORT
+        value: 8080
+      - key: FRONTEND_ORIGIN
+        sync: false
+      - key: DB_URL
+        sync: false
+      - key: DB_USERNAME
+        sync: false
+      - key: DB_PASSWORD
+        sync: false
+      - key: JWT_SECRET
+        sync: false
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: FINLIFE_AUTH_KEY
+        sync: false
+      - key: CARD_EXTERNAL_MODE
+        value: public-data-all
+      - key: CARD_PUBLIC_ALL_SERVICE_KEY
+        sync: false
+      - key: CARD_PUBLIC_ALL_INCLUDE_KDB
+        value: true
+      - key: CARD_PUBLIC_ALL_INCLUDE_KRPOST
+        value: true
+      - key: CARD_PUBLIC_ALL_INCLUDE_FINANCE_STATS
+        value: true
+      - key: CATALOG_SYNC_STARTUP_ENABLED
+        value: false
+      - key: CATALOG_SYNC_SCHEDULED_ENABLED
+        value: false
+      - key: REC_QUALITY_SCHEDULED_ENABLED
+        value: false
