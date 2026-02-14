@@ -1,5 +1,8 @@
 import {
+  CardExternalSyncResponse,
   CatalogSummaryResponse,
+  CatalogSyncStatusResponse,
+  FinlifeSyncResponse,
   RecommendationAnalyticsResponse,
   RecommendationRedirectResponse,
   RecommendationRunHistoryItem,
@@ -78,5 +81,25 @@ export async function redirectRecommendation(
 export async function getCatalogSummary(): Promise<CatalogSummaryResponse> {
   return requestJson<CatalogSummaryResponse>("/api/catalog/summary", {
     method: "GET"
+  });
+}
+
+export async function getCatalogSyncStatus(): Promise<CatalogSyncStatusResponse> {
+  return requestJson<CatalogSyncStatusResponse>("/api/catalog/sync/status", {
+    method: "GET"
+  });
+}
+
+export async function syncCatalogFinlife(): Promise<FinlifeSyncResponse> {
+  return requestJson<FinlifeSyncResponse>("/api/catalog/sync/finlife", {
+    method: "POST",
+    body: JSON.stringify({})
+  });
+}
+
+export async function syncCatalogCardsExternal(): Promise<CardExternalSyncResponse> {
+  return requestJson<CardExternalSyncResponse>("/api/catalog/sync/cards/external", {
+    method: "POST",
+    body: JSON.stringify({})
   });
 }

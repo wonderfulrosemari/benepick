@@ -2,7 +2,10 @@ import { useEffect, useMemo, useState } from 'react';
 import ProductCard from './components/ProductCard';
 import {
     getCatalogSummary,
+    getCatalogSyncStatus,
     getRecommendationAnalytics,
+    syncCatalogCardsExternal,
+    syncCatalogFinlife,
     getRecommendationRun,
     redirectRecommendation,
     simulateRecommendations,
@@ -11,6 +14,7 @@ import {
     AccountPriority,
     CardPriority,
     CatalogSummaryResponse,
+    CatalogSyncStatusResponse,
     Priority,
     RecommendationAnalyticsResponse,
     RecommendationItem,
@@ -98,10 +102,34 @@ function App() {
     const [runLookupId, setRunLookupId] = useState('');
     const [loadingRun, setLoadingRun] = useState(false);
     const [catalogSummary, setCatalogSummary] = useState<CatalogSummaryResponse | null>(null);
+    const [catalogSyncStatus, setCatalogSyncStatus] = useState<CatalogSyncStatusResponse | null>(null);
     const [catalogLoading, setCatalogLoading] = useState(false);
+    const [catalogSyncLoading, setCatalogSyncLoading] = useState(false);
+    const [syncingTarget, setSyncingTarget] = useState<"finlife" | "cards" | null>(null);
     const [copied, setCopied] = useState(false);
 
     const effectiveCardPriority = annualFeeFirst ? 'annualfee' : profile.cardPriority;
+
+    const formatDateTime = (value?: string | null) => {
+        if (!value) {
+            return '-';
+        }
+        const date = new Date(value);
+        if (Number.isNaN(date.getTime())) {
+            return '-';
+        }
+        return date.toLocaleString('ko-KR');
+    };
+
+    const statusLabel = (result?: string) => {
+        if (result === 'SUCCESS') {
+            return '성공';
+        }
+        if (result === 'FAILED') {
+            return '실패';
+        }
+        return '대기';
+    };
 
     const runShareUrl = useMemo(() => {
         if (!result) {
@@ -128,6 +156,35 @@ function App() {
             // keep UI usable even if summary fails
         } finally {
             setCatalogLoading(false);
+        }
+    };
+
+    const loadCatalogSyncStatus = async () => {
+        setCatalogSyncLoading(true);
+        try {
+            const status = await getCatalogSyncStatus();
+            setCatalogSyncStatus(status);
+        } catch {
+            setCatalogSyncStatus(null);
+        } finally {
+            setCatalogSyncLoading(false);
+        }
+    };
+
+    const runCatalogSync = async (target: "finlife" | "cards") => {
+        setSyncingTarget(target);
+        setError(null);
+        try {
+            if (target === "finlife") {
+                await syncCatalogFinlife();
+            } else {
+                await syncCatalogCardsExternal();
+            }
+            await Promise.all([loadCatalog(), loadCatalogSyncStatus()]);
+        } catch (e) {
+            setError(e instanceof Error ? e.message : "동기화 요청에 실패했습니다.");
+        } finally {
+            setSyncingTarget(null);
         }
     };
 
@@ -164,6 +221,7 @@ function App() {
 
     useEffect(() => {
         void loadCatalog();
+        void loadCatalogSyncStatus();
 
         const initialRunId = new URLSearchParams(window.location.search).get('runId');
         if (initialRunId) {
@@ -257,6 +315,9 @@ function App() {
             ? '실데이터 일부 동기화됨'
             : '현재 시드 데이터 사용 중'
         : '데이터 상태 확인 중';
+
+    const finlifeStatus = catalogSyncStatus?.finlife;
+    const cardsStatus = catalogSyncStatus?.cards;
 
     const highlightKeywords = useMemo(() => {
         const selectedAccountLabels = accountCategoryOptions
@@ -677,14 +738,96 @@ function App() {
                         {catalogSummary?.finlifeAccounts ?? '-'}개 · 카드 {catalogSummary?.totalCards ?? '-'}개 · 외부
                         카드 {catalogSummary?.externalCards ?? '-'}개
                     </p>
-                    <button
-                        type="button"
-                        className="ghost-button"
-                        onClick={() => void loadCatalog()}
-                        disabled={catalogLoading}
-                    >
-                        {catalogLoading ? '갱신 중...' : '상태 다시 확인'}
-                    </button>
+
+                    <p className="sync-generated">
+                        동기화 상태 시각: {catalogSyncStatus ? formatDateTime(catalogSyncStatus.generatedAt) : '-'}
+                    </p>
+
+                    <div className="status-actions">
+                        <button
+                            type="button"
+                            className="ghost-button"
+                            onClick={() => {
+                                void loadCatalog();
+                                void loadCatalogSyncStatus();
+                            }}
+                            disabled={catalogLoading || catalogSyncLoading || syncingTarget !== null}
+                        >
+                            {catalogLoading || catalogSyncLoading ? '갱신 중...' : '상태 다시 확인'}
+                        </button>
+                        <button
+                            type="button"
+                            className="ghost-button"
+                            onClick={() => void runCatalogSync('finlife')}
+                            disabled={syncingTarget !== null}
+                        >
+                            {syncingTarget === 'finlife' ? '계좌 동기화 중...' : '계좌 실데이터 동기화'}
+                        </button>
+                        <button
+                            type="button"
+                            className="ghost-button"
+                            onClick={() => void runCatalogSync('cards')}
+                            disabled={syncingTarget !== null}
+                        >
+                            {syncingTarget === 'cards' ? '카드 동기화 중...' : '카드 실데이터 동기화'}
+                        </button>
+                    </div>
+
+                    <div className="sync-status-grid">
+                        <article className="sync-status-card">
+                            <div className="sync-status-head">
+                                <p className="sync-card-title">계좌(FinLife)</p>
+                                <span
+                                    className={`sync-pill ${
+                                        finlifeStatus?.lastResult === 'SUCCESS'
+                                            ? 'is-success'
+                                            : finlifeStatus?.lastResult === 'FAILED'
+                                              ? 'is-failed'
+                                              : ''
+                                    }`}
+                                >
+                                    {statusLabel(finlifeStatus?.lastResult)}
+                                </span>
+                            </div>
+                            <p className="sync-card-meta">
+                                마지막 실행: {formatDateTime(finlifeStatus?.lastRunAt)} · 마지막 성공:{' '}
+                                {formatDateTime(finlifeStatus?.lastSuccessAt)}
+                            </p>
+                            <p className="sync-card-meta">
+                                가져옴/저장/비활성/건너뜀: {finlifeStatus?.lastFetched ?? '-'} /{' '}
+                                {finlifeStatus?.lastUpserted ?? '-'} / {finlifeStatus?.lastDeactivated ?? '-'} /{' '}
+                                {finlifeStatus?.lastSkipped ?? '-'}
+                            </p>
+                            <p className="sync-card-message">{finlifeStatus?.lastMessage || '-'}</p>
+                        </article>
+
+                        <article className="sync-status-card">
+                            <div className="sync-status-head">
+                                <p className="sync-card-title">카드(외부/공공)</p>
+                                <span
+                                    className={`sync-pill ${
+                                        cardsStatus?.lastResult === 'SUCCESS'
+                                            ? 'is-success'
+                                            : cardsStatus?.lastResult === 'FAILED'
+                                              ? 'is-failed'
+                                              : ''
+                                    }`}
+                                >
+                                    {statusLabel(cardsStatus?.lastResult)}
+                                </span>
+                            </div>
+                            <p className="sync-card-meta">
+                                마지막 실행: {formatDateTime(cardsStatus?.lastRunAt)} · 마지막 성공:{' '}
+                                {formatDateTime(cardsStatus?.lastSuccessAt)}
+                            </p>
+                            <p className="sync-card-meta">
+                                가져옴/저장/비활성/건너뜀: {cardsStatus?.lastFetched ?? '-'} /{' '}
+                                {cardsStatus?.lastUpserted ?? '-'} / {cardsStatus?.lastDeactivated ?? '-'} /{' '}
+                                {cardsStatus?.lastSkipped ?? '-'}
+                            </p>
+                            <p className="sync-card-message">{cardsStatus?.lastMessage || '-'}</p>
+                        </article>
+                    </div>
                 </section>
             </main>
 

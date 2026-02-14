@@ -124,3 +124,38 @@ export type CatalogSummaryResponse = {
   totalCards: number;
   externalCards: number;
 };
+
+export type CatalogSyncTargetStatusResponse = {
+  source: string;
+  lastResult: string;
+  lastTrigger: string;
+  lastRunAt: string | null;
+  lastSuccessAt: string | null;
+  lastFailureAt: string | null;
+  lastMessage: string;
+  lastFetched: number | null;
+  lastUpserted: number | null;
+  lastDeactivated: number | null;
+  lastSkipped: number | null;
+  consecutiveFailureCount: number;
+};
+
+export type CatalogSyncStatusResponse = {
+  generatedAt: string;
+  finlife: CatalogSyncTargetStatusResponse;
+  cards: CatalogSyncTargetStatusResponse;
+};
+
+export type FinlifeSyncResponse = {
+  fetchedProducts: number;
+  upsertedProducts: number;
+  deactivatedProducts: number;
+  skippedProducts: number;
+};
+
+export type CardExternalSyncResponse = {
+  fetched: number;
+  upserted: number;
+  deactivated: number;
+  skipped: number;
+};
